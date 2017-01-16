@@ -1,0 +1,102 @@
+/* Styling single.posts and pages. */
+.post{
+	margin-bottom: 40px;
+	background: #fff;
+}
+.post .featured-image img{
+	width: 100%;
+	display: block;
+}
+.post .wrapper{
+	padding: 40px;
+}
+.post p.meta{
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 3px;
+	color: #ccc;
+	margin-top: 0;
+	margin-bottom: 25px;
+}
+.post p.meta a{
+	color: #ffcc00;
+}
+.post h1.title{
+	color: #333;
+	text-transform: uppercase;
+	font-weight: 700;
+	font-size: 36px;
+	text-decoration: none;
+	-ms-word-wrap: break-word;
+	word-wrap: break-word;
+}
+.post .content{
+	color: #888;
+	line-height: 1.8em;
+}
+.post .content h1,
+.post .content h2,
+.post .content h3,
+.post .content h4,
+.post .content h5,
+.post .content h6{
+	color: #333;
+	text-transform: uppercase;
+	font-weight: 700;
+}
+.post .content img{
+	max-width: 100%;
+	height: auto !important;
+}
+.post .content strong{
+	color: #777;
+}
+.post .content table{
+	width: 100%;
+}
+.post .content a{
+	color: #ffcc00;
+}
+.post .content a:hover{
+	text-decoration: underline;
+}
+.page-links a{
+	color: #ffcc00;
+}
+.single-tags{
+	font-size: 11px;
+	letter-spacing: 3px;
+	text-transform: uppercase;
+}
+.single-tags a{
+	color: #ffcc00;
+}
+.single-post-navigation{
+	margin-top: 20px;
+	border-top: 1px solid #ccc;
+}
+.single-post-navigation a{
+	color: #666;
+}
+.single-post-navigation .nav-previous{
+	width: 50%;
+	float: left;
+	line-height: 40px;
+	text-align: left;
+}
+.single-post-navigation .nav-next{
+	width: 50%;
+	float: right;
+	line-height: 40px;
+	text-align: right;
+}
+@media (max-width: 768px) {
+	.single-post-navigation .nav-previous{
+		width: 100%;
+		float: none;
+	}
+	.single-post-navigation .nav-next{
+		width: 100%;
+		float: none;
+	}
+}

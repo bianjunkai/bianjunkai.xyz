@@ -1,0 +1,36 @@
+== changelog ==
+= 1.1.0 =
+* Bug fix: Made changes as per review comments
+
+= 1.0.9 =
+* Bug fix: update empty() invocation compatible with PHP < 5.5 version
+
+= 1.0.8 =
+* Bug fix: More translation ready
+* Feature: Added changelog.txt file
+* Feature: Added languages function load_theme_textdomain
+
+= 1.0.7 =
+* Bug fix: Updated names of third party references
+* Bug fix: More translation ready
+* Bug fix: Removed GPL license clause from readme.txt
+
+= 1.0.5 =
+* Bug fix: Added theme_location key to wp_nav_menu
+* Bug fix: Fixed missing textdomain in page.php
+
+= 1.0.4 =
+* Bug fix: Added theme slug to all function names
+* Bug fix: Removed reference to direct cdn links in header.php
+* Bug fix: Internationalized all static text in the theme
+* Bug fix: Conditional IE specific script tags added using wp_enqueue_script
+
+= 1.0.3 =
+* Bug fix: Added copyright info in readme.txt
+* Bug fix: Removed unused files from theme folder
+
+= 1.0.1 =
+* Bug fix: Theme updated based on new theme check validations
+
+= 1.0.0 =
+* Theme completed and uploaded to wordpress.org

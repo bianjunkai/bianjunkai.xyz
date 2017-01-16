@@ -1,0 +1,61 @@
+/* Styling single.pages and pages. */
+.page{
+	margin-bottom: 40px;
+}
+.page article{
+	background: #fff;
+}
+.page .wrapper{
+	padding: 40px;
+}
+.page p.meta{
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 3px;
+	color: #ccc;
+	margin-top: 0;
+	margin-bottom: 25px;
+}
+.page p.meta a{
+	color: #ffcc00;
+}
+.page h1.title{
+	color: #333;
+	text-transform: uppercase;
+	font-weight: 700;
+	font-size: 36px;
+	text-decoration: none;
+	margin-top: 0;
+	-ms-word-wrap: break-word;
+	word-wrap: break-word;
+}
+.page .content{
+	color: #888;
+	line-height: 1.8em;
+}
+.page .content img{
+	max-width: 100%;
+	height: auto !important;
+}
+.page .content h1,
+.page .content h2,
+.page .content h3,
+.page .content h4,
+.page .content h5,
+.page .content h6{
+	color: #333;
+	text-transform: uppercase;
+	font-weight: 700;
+}
+.page .content strong{
+	color: #777;
+}
+.page .content table{
+	width: 100%;
+}
+.page .content a{
+	color: #ffcc00;
+}
+.page .content a:hover{
+	text-decoration: underline;
+}

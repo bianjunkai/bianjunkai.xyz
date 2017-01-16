@@ -1,0 +1,437 @@
+# Copyright (C) 2016 Compete Themes
+# This file is distributed under the GNU General Public License v2 or later.
+msgid ""
+msgstr ""
+"Project-Id-Version: Cele 1.09\n"
+"Report-Msgid-Bugs-To: http://wordpress.org/support/theme/style\n"
+"POT-Creation-Date: 2016-12-05 14:54:31+00:00\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"PO-Revision-Date: 2016-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"X-Generator: grunt-wp-i18n 0.4.9\n"
+
+#: 404.php:6
+msgid "404: Page Not Found"
+msgstr ""
+
+#: 404.php:9
+msgid ""
+"Looks like nothing was found on this url.  Double-check that the url is "
+"correct or try the search form below to find what you were looking for."
+msgstr ""
+
+#: comments.php:12 comments.php:32 comments.php:54
+msgid "Be First to Comment"
+msgstr ""
+
+#: comments.php:12 comments.php:32 comments.php:54
+msgid "One Comment"
+msgstr ""
+
+#: comments.php:12 comments.php:32 comments.php:54 content/comments-link.php:5
+#: content/comments-link.php:8
+msgid "% Comments"
+msgstr ""
+
+#: comments.php:46
+msgid ""
+"Comments are closed, but <a href=\"%s\" title=\"Trackback URL for this "
+"post\">trackbacks</a> and pingbacks are open."
+msgstr ""
+
+#: comments.php:68 comments.php:75
+msgid "Comments are closed."
+msgstr ""
+
+#: content/archive-header.php:4
+msgid "Posts"
+msgstr ""
+
+#: content/comments-link.php:2
+msgid "comment icon"
+msgstr ""
+
+#: content/comments-link.php:5
+msgid "Comments closed"
+msgstr ""
+
+#: content/comments-link.php:5 content/comments-link.php:8
+msgid "1 Comment"
+msgstr ""
+
+#: content/comments-link.php:8
+msgid "Leave a Comment"
+msgstr ""
+
+#: content/post-categories.php:9
+msgid "Read more posts about"
+msgstr ""
+
+#: content/post-categories.php:15
+msgid "View all posts in %s"
+msgstr ""
+
+#: content/post-nav-attachment.php:3
+msgid "Previous Image"
+msgstr ""
+
+#: content/post-nav-attachment.php:6
+msgid "Next Image"
+msgstr ""
+
+#: content/post-nav.php:7
+msgid "Previous Post"
+msgstr ""
+
+#: content/post-nav.php:10
+msgid "No Older Posts"
+msgstr ""
+
+#: content/post-nav.php:16 content/post-nav.php:29
+msgid "Return to Blog"
+msgstr ""
+
+#: content/post-nav.php:20
+msgid "Next Post"
+msgstr ""
+
+#: content/post-nav.php:23
+msgid "No Newer Posts"
+msgstr ""
+
+#: content/post-tags.php:8
+msgid "View all posts tagged %s"
+msgstr ""
+
+#: content/search-bar.php:11 searchform.php:3
+msgid "Search"
+msgstr ""
+
+#: content/search-bar.php:12
+msgid "Search..."
+msgstr ""
+
+#: content/search-bar.php:13 searchform.php:5
+msgid "Search for:"
+msgstr ""
+
+#: content-page.php:11 content.php:12
+msgid "Pages:"
+msgstr ""
+
+#: footer.php:11
+msgid "<a href=\"%s\">Cele Theme</a> by Compete Themes."
+msgstr ""
+
+#: functions.php:37
+msgid "Primary"
+msgstr ""
+
+#: functions.php:49
+msgid "Primary Sidebar"
+msgstr ""
+
+#: functions.php:51
+msgid ""
+"Widgets in this area will be shown in the sidebar next to the main post "
+"content"
+msgstr ""
+
+#: functions.php:77
+msgid "Your comment is awaiting moderation."
+msgstr ""
+
+#: functions.php:84
+msgid "Reply"
+msgstr ""
+
+#: functions.php:89
+msgid "Edit"
+msgstr ""
+
+#: functions.php:101
+msgid "(optional)"
+msgstr ""
+
+#: functions.php:106
+msgid "Name"
+msgstr ""
+
+#: functions.php:107
+msgid "Jane Doe"
+msgstr ""
+
+#: functions.php:113
+msgid "Email"
+msgstr ""
+
+#: functions.php:114
+msgid "name@email.com"
+msgstr ""
+
+#: functions.php:120
+msgid "Website"
+msgstr ""
+
+#: functions.php:121
+msgid "http://google.com"
+msgstr ""
+
+#: functions.php:135
+msgid "Comment"
+msgstr ""
+
+#: functions.php:166 functions.php:175 functions.php:191
+msgid "Continue reading"
+msgstr ""
+
+#: functions.php:342 functions.php:343
+msgid "email"
+msgstr ""
+
+#: functions.php:388 header.php:25 inc/scripts.php:16
+msgid "open menu"
+msgstr ""
+
+#: functions.php:401
+msgid "Featured"
+msgstr ""
+
+#: functions.php:463
+msgid "Customizer settings deleted."
+msgstr ""
+
+#: functions.php:469
+msgid "Cele successfully activated!"
+msgstr ""
+
+#: header.php:11
+msgid "Press \"Enter\" to skip to content"
+msgstr ""
+
+#: inc/customizer.php:15
+msgid "Front Page"
+msgstr ""
+
+#: inc/customizer.php:29
+msgid ""
+"<a target=\"_blank\" href=\"%s\">Cele Pro</a> is the plugin that makes "
+"advanced customization simple - and fun too!"
+msgstr ""
+
+#: inc/customizer.php:30
+msgid "Cele Pro adds the following features to Cele:"
+msgstr ""
+
+#: inc/customizer.php:32
+msgid "Custom colors"
+msgstr ""
+
+#: inc/customizer.php:33
+msgid "New fonts"
+msgstr ""
+
+#: inc/customizer.php:34
+msgid "Flexible header image"
+msgstr ""
+
+#: inc/customizer.php:35
+msgid "+ 7 more features"
+msgstr ""
+
+#: inc/customizer.php:37
+msgid "View Cele Pro"
+msgstr ""
+
+#: inc/customizer.php:47 theme-options.php:33
+msgid "Cele Pro"
+msgstr ""
+
+#: inc/customizer.php:67
+msgid "Logo"
+msgstr ""
+
+#: inc/customizer.php:77
+msgid "Upload custom logo."
+msgstr ""
+
+#: inc/customizer.php:93
+msgid "Social Media Icons"
+msgstr ""
+
+#: inc/customizer.php:95
+msgid "Add the URL for each of your social profiles."
+msgstr ""
+
+#: inc/customizer.php:108
+msgid "Email Address"
+msgstr ""
+
+#: inc/customizer.php:175
+msgid "Blog"
+msgstr ""
+
+#: inc/customizer.php:185
+msgid "Show full posts on blog?"
+msgstr ""
+
+#: inc/customizer.php:190 inc/customizer.php:321
+msgid "Yes"
+msgstr ""
+
+#: inc/customizer.php:191 inc/customizer.php:322
+msgid "No"
+msgstr ""
+
+#: inc/customizer.php:201
+msgid "Excerpt word count"
+msgstr ""
+
+#: inc/customizer.php:208
+msgid "Continue Reading"
+msgstr ""
+
+#: inc/customizer.php:213
+msgid "Read More button text"
+msgstr ""
+
+#: inc/customizer.php:223
+msgid "Display Controls"
+msgstr ""
+
+#: inc/customizer.php:234
+msgid "Post author name in byline"
+msgstr ""
+
+#: inc/customizer.php:238 inc/customizer.php:254 inc/customizer.php:302
+msgid "Show"
+msgstr ""
+
+#: inc/customizer.php:239 inc/customizer.php:255 inc/customizer.php:303
+msgid "Hide"
+msgstr ""
+
+#: inc/customizer.php:250
+msgid "Post date in byline"
+msgstr ""
+
+#: inc/customizer.php:275
+msgid "Custom CSS"
+msgstr ""
+
+#: inc/customizer.php:286
+msgid "Add Custom CSS Here:"
+msgstr ""
+
+#: inc/scripts.php:17
+msgid "close menu"
+msgstr ""
+
+#: inc/scripts.php:18
+msgid "open dropdown menu"
+msgstr ""
+
+#: inc/scripts.php:19
+msgid "close dropdown menu"
+msgstr ""
+
+#: index.php:19
+msgid "Previous"
+msgstr ""
+
+#: index.php:20
+msgid "Next"
+msgstr ""
+
+#: search.php:11
+msgid "No search results for \"%s\""
+msgstr ""
+
+#: search.php:35
+msgid "Can't find what you're looking for?  Try refining your search:"
+msgstr ""
+
+#: searchform.php:6
+msgid "Search for..."
+msgstr ""
+
+#: searchform.php:7
+msgid "Go"
+msgstr ""
+
+#: sidebar-primary.php:4
+msgid "Sidebar"
+msgstr ""
+
+#: theme-options.php:4 theme-options.php:20
+msgid "Cele Dashboard"
+msgstr ""
+
+#: theme-options.php:24
+msgid "Get Started"
+msgstr ""
+
+#: theme-options.php:25
+msgid ""
+"Not sure where to start? The Cele Support Center is filled with tutorials "
+"that will take you step-by-step through every feature in Cele."
+msgstr ""
+
+#: theme-options.php:28
+msgid "Visit Support Center"
+msgstr ""
+
+#: theme-options.php:34
+msgid ""
+"Download the Cele Pro plugin and unlock custom colors, new fonts, sliders, "
+"and more"
+msgstr ""
+
+#: theme-options.php:37
+msgid "See Full Feature List"
+msgstr ""
+
+#: theme-options.php:42 theme-options.php:44
+msgid "Leave a Review"
+msgstr ""
+
+#: theme-options.php:43
+msgid "Help others find Cele by leaving a review on wordpress.org."
+msgstr ""
+
+#: theme-options.php:47 theme-options.php:55
+msgid "Reset Customizer Settings"
+msgstr ""
+
+#: theme-options.php:49
+msgid ""
+"<strong>Warning:</strong> Clicking this button will erase the Cele theme's "
+"current settings in the <a href='%s'>Customizer</a>."
+msgstr ""
+
+#. Description of the plugin/theme
+msgid ""
+"Cele is a refreshingly simple and clean theme. It’s been carefully designed "
+"to look and perform great across mobile devices, computers, and tablets. "
+"Get your visitors’ attention and keep it with this content first, "
+"minimalist theme. Preview on desktop, tablets, and mobile with our "
+"interactive live demo: https://www.competethemes.com/demos/?theme=cele"
+msgstr ""
+
+#: content/post-byline.php:15
+msgctxt "This blog post was published on some date"
+msgid "Published %s"
+msgstr ""
+
+#: content/post-byline.php:17
+msgctxt "This blog post was published by some author"
+msgid "Published by %s"
+msgstr ""
+
+#: content/post-byline.php:19
+msgctxt "This blog post was published on some date by some author"
+msgid "Published %1$s by %2$s"
+msgstr ""
