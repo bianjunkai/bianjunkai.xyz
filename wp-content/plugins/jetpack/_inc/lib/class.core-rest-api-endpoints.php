@@ -1,4 +1,11 @@
 <?php
+
+use Automattic\Jetpack\Connection\Client;
+use Automattic\Jetpack\Connection\Manager as Connection_Manager;
+use Automattic\Jetpack\JITMS\JITM;
+use Automattic\Jetpack\Tracking;
+use Automattic\Jetpack\Status;
+
 /**
  * Register WP REST API endpoints for Jetpack.
  *
@@ -17,6 +24,9 @@ require_once ABSPATH . '/wp-includes/class-wp-error.php';
 
 // Register endpoints when WP REST API is initialized.
 add_action( 'rest_api_init', array( 'Jetpack_Core_Json_Api_Endpoints', 'register_endpoints' ) );
+// Load API endpoints that are synced with WP.com
+// Each of these is a class that will register its own routes on 'rest_api_init'.
+require_once JETPACK__PLUGIN_DIR . '_inc/lib/core-api/load-wpcom-endpoints.php';
 
 /**
  * Class Jetpack_Core_Json_Api_Endpoints
@@ -47,6 +57,8 @@ class Jetpack_Core_Json_Api_Endpoints {
 
 		// Load API endpoints
 		require_once JETPACK__PLUGIN_DIR . '_inc/lib/core-api/class.jetpack-core-api-module-endpoints.php';
+		require_once JETPACK__PLUGIN_DIR . '_inc/lib/core-api/class.jetpack-core-api-site-endpoints.php';
+		require_once JETPACK__PLUGIN_DIR . '_inc/lib/core-api/class.jetpack-core-api-widgets-endpoints.php';
 
 		self::$user_permissions_error_msg = esc_html__(
 			'You do not have the correct user permissions to perform this action.
@@ -56,17 +68,93 @@ class Jetpack_Core_Json_Api_Endpoints {
 
 		self::$stats_roles = array( 'administrator', 'editor', 'author', 'contributor', 'subscriber' );
 
+		$ixr_client = new Jetpack_IXR_Client( array( 'user_id' => get_current_user_id() ) );
+		$core_api_endpoint = new Jetpack_Core_API_Data( $ixr_client );
+		$module_list_endpoint = new Jetpack_Core_API_Module_List_Endpoint();
+		$module_data_endpoint = new Jetpack_Core_API_Module_Data_Endpoint();
+		$module_toggle_endpoint = new Jetpack_Core_API_Module_Toggle_Endpoint( new Jetpack_IXR_Client() );
+		$site_endpoint = new Jetpack_Core_API_Site_Endpoint();
+		$widget_endpoint = new Jetpack_Core_API_Widget_Endpoint();
+
+		register_rest_route( 'jetpack/v4', 'plans', array(
+			'methods'             => WP_REST_Server::READABLE,
+			'callback'            => __CLASS__ . '::get_plans',
+			'permission_callback' => __CLASS__ . '::connect_url_permission_callback',
+		) );
+
+		register_rest_route( 'jetpack/v4', 'products', array(
+			'methods'             => WP_REST_Server::READABLE,
+			'callback'            => __CLASS__ . '::get_products',
+			'permission_callback' => __CLASS__ . '::connect_url_permission_callback',
+		) );
+
+		register_rest_route( 'jetpack/v4', 'marketing/survey', array(
+			'methods'             => WP_REST_Server::CREATABLE,
+			'callback'            => __CLASS__ . '::submit_survey',
+			'permission_callback' => __CLASS__ . '::disconnect_site_permission_callback',
+		) );
+
+		register_rest_route( 'jetpack/v4', '/jitm', array(
+			'methods'  => WP_REST_Server::READABLE,
+			'callback' => __CLASS__ . '::get_jitm_message',
+		) );
+
+		register_rest_route( 'jetpack/v4', '/jitm', array(
+			'methods'  => WP_REST_Server::CREATABLE,
+			'callback' => __CLASS__ . '::delete_jitm_message'
+		) );
+
+		// Authorize a remote user
+		register_rest_route( 'jetpack/v4', '/remote_authorize', array(
+			'methods' => WP_REST_Server::EDITABLE,
+			'callback' => __CLASS__ . '::remote_authorize',
+		) );
+
 		// Get current connection status of Jetpack
 		register_rest_route( 'jetpack/v4', '/connection', array(
 			'methods' => WP_REST_Server::READABLE,
 			'callback' => __CLASS__ . '::jetpack_connection_status',
 		) );
 
+		// Test current connection status of Jetpack
+		register_rest_route( 'jetpack/v4', '/connection/test', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => __CLASS__ . '::jetpack_connection_test',
+			'permission_callback' => __CLASS__ . '::manage_modules_permission_check',
+		) );
+
+		// Endpoint specific for privileged servers to request detailed debug information.
+		register_rest_route( 'jetpack/v4', '/connection/test-wpcom/', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => __CLASS__ . '::jetpack_connection_test_for_external',
+			'permission_callback' => __CLASS__ . '::view_jetpack_connection_test_check',
+		) );
+
+		register_rest_route( 'jetpack/v4', '/rewind', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => __CLASS__ . '::get_rewind_data',
+			'permission_callback' => __CLASS__ . '::view_admin_page_permission_check',
+		) );
+
+		register_rest_route(
+			'jetpack/v4',
+			'/scan',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => __CLASS__ . '::get_scan_state',
+				'permission_callback' => __CLASS__ . '::view_admin_page_permission_check',
+			)
+		);
+
 		// Fetches a fresh connect URL
 		register_rest_route( 'jetpack/v4', '/connection/url', array(
 			'methods' => WP_REST_Server::READABLE,
 			'callback' => __CLASS__ . '::build_connect_url',
 			'permission_callback' => __CLASS__ . '::connect_url_permission_callback',
+			'args'                => array(
+				'from'     => array( 'type' => 'string' ),
+				'redirect' => array( 'type' => 'string' ),
+			),
 		) );
 
 		// Get current user connection data
@@ -74,6 +162,51 @@ class Jetpack_Core_Json_Api_Endpoints {
 			'methods' => WP_REST_Server::READABLE,
 			'callback' => __CLASS__ . '::get_user_connection_data',
 			'permission_callback' => __CLASS__ . '::get_user_connection_data_permission_callback',
+		) );
+
+		// Get list of plugins that use the Jetpack connection.
+		register_rest_route(
+			'jetpack/v4',
+			'/connection/plugins',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => __CLASS__ . '::get_connection_plugins',
+				'permission_callback' => __CLASS__ . '::activate_plugins_permission_check',
+			)
+		);
+
+		// Start the connection process by registering the site on WordPress.com servers.
+		register_rest_route( 'jetpack/v4', '/connection/register', array(
+			'methods'             => WP_REST_Server::EDITABLE,
+			'callback'            => __CLASS__ . '::register_site',
+			'permission_callback' => __CLASS__ . '::connect_url_permission_callback',
+			'args'                => array(
+				'registration_nonce' => array( 'type' => 'string' ),
+			),
+		) );
+
+		// Set the connection owner
+		register_rest_route( 'jetpack/v4', '/connection/owner', array(
+			'methods' => WP_REST_Server::EDITABLE,
+			'callback' => __CLASS__ . '::set_connection_owner',
+			'permission_callback' => __CLASS__ . '::set_connection_owner_permission_callback',
+		) );
+
+		// Current user: get or set tracking settings.
+		register_rest_route( 'jetpack/v4', '/tracking/settings', array(
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => __CLASS__ . '::get_user_tracking_settings',
+				'permission_callback' => __CLASS__ . '::view_admin_page_permission_check',
+			),
+			array(
+				'methods'             => WP_REST_Server::EDITABLE,
+				'callback'            => __CLASS__ . '::update_user_tracking_settings',
+				'permission_callback' => __CLASS__ . '::view_admin_page_permission_check',
+				'args'                => array(
+					'tracks_opt_out' => array( 'type' => 'boolean' ),
+				),
+			),
 		) );
 
 		// Disconnect site from WordPress.com servers
@@ -95,6 +228,48 @@ class Jetpack_Core_Json_Api_Endpoints {
 			'methods' => WP_REST_Server::READABLE,
 			'callback' => __CLASS__ . '::get_site_data',
 			'permission_callback' => __CLASS__ . '::view_admin_page_permission_check',
+		) );
+
+		// Get current site data
+		register_rest_route( 'jetpack/v4', '/site/features', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => array( $site_endpoint, 'get_features' ),
+			'permission_callback' => array( $site_endpoint , 'can_request' ),
+		) );
+
+		register_rest_route(
+			'jetpack/v4',
+			'/site/products',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $site_endpoint, 'get_products' ),
+				'permission_callback' => array( $site_endpoint, 'can_request' ),
+			)
+		);
+
+		// Get current site purchases.
+		register_rest_route(
+			'jetpack/v4',
+			'/site/purchases',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $site_endpoint, 'get_purchases' ),
+				'permission_callback' => array( $site_endpoint, 'can_request' ),
+			)
+		);
+
+		// Get current site benefits
+		register_rest_route( 'jetpack/v4', '/site/benefits', array(
+			'methods'             => WP_REST_Server::READABLE,
+			'callback'            => array( $site_endpoint, 'get_benefits' ),
+			'permission_callback' => array( $site_endpoint, 'can_request' ),
+		) );
+
+		// Get Activity Log data for this site.
+		register_rest_route( 'jetpack/v4', '/site/activity', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => __CLASS__ . '::get_site_activity',
+			'permission_callback' => __CLASS__ . '::manage_modules_permission_check',
 		) );
 
 		// Confirm that a site in identity crisis should be in staging mode
@@ -119,22 +294,24 @@ class Jetpack_Core_Json_Api_Endpoints {
 		) );
 
 		// Return all modules
-		self::route(
-			'module/all',
-			'Jetpack_Core_API_Module_List_Endpoint',
-			WP_REST_Server::READABLE
-		);
+		register_rest_route( 'jetpack/v4', '/module/all', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => array( $module_list_endpoint, 'process' ),
+			'permission_callback' => array( $module_list_endpoint, 'can_request' ),
+		) );
 
 		// Activate many modules
-		self::route(
-			'/module/all/active',
-			'Jetpack_Core_API_Module_List_Endpoint',
-			WP_REST_Server::EDITABLE,
-			NULL,
-			array(
+		register_rest_route( 'jetpack/v4', '/module/all/active', array(
+			'methods' => WP_REST_Server::EDITABLE,
+			'callback' => array( $module_list_endpoint, 'process' ),
+			'permission_callback' => array( $module_list_endpoint, 'can_request' ),
+			'args' => array(
 				'modules' => array(
 					'default'           => '',
 					'type'              => 'array',
+					'items'             => array(
+						'type'          => 'string',
+					),
 					'required'          => true,
 					'validate_callback' => __CLASS__ . '::validate_module_list',
 				),
@@ -145,25 +322,21 @@ class Jetpack_Core_Json_Api_Endpoints {
 					'validate_callback' => __CLASS__ . '::validate_boolean',
 				),
 			)
-		);
-
-		Jetpack::load_xml_rpc_client();
+		) );
 
 		// Return a single module and update it when needed
-		self::route(
-			'/module/(?P<slug>[a-z\-]+)',
-			'Jetpack_Core_API_Data',
-			WP_REST_Server::READABLE,
-			new Jetpack_IXR_Client( array( 'user_id' => get_current_user_id() ) )
-		);
+		register_rest_route( 'jetpack/v4', '/module/(?P<slug>[a-z\-]+)', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => array( $core_api_endpoint, 'process' ),
+			'permission_callback' => array( $core_api_endpoint, 'can_request' ),
+		) );
 
 		// Activate and deactivate a module
-		self::route(
-			'/module/(?P<slug>[a-z\-]+)/active',
-			'Jetpack_Core_API_Module_Toggle_Endpoint',
-			WP_REST_Server::EDITABLE,
-			new Jetpack_IXR_Client(),
-			array(
+		register_rest_route( 'jetpack/v4', '/module/(?P<slug>[a-z\-]+)/active', array(
+			'methods' => WP_REST_Server::EDITABLE,
+			'callback' => array( $module_toggle_endpoint, 'process' ),
+			'permission_callback' => array( $module_toggle_endpoint, 'can_request' ),
+			'args' => array(
 				'active' => array(
 					'default'           => true,
 					'type'              => 'boolean',
@@ -171,25 +344,23 @@ class Jetpack_Core_Json_Api_Endpoints {
 					'validate_callback' => __CLASS__ . '::validate_boolean',
 				),
 			)
-		);
+		) );
 
 		// Update a module
-		self::route(
-			'/module/(?P<slug>[a-z\-]+)',
-			'Jetpack_Core_API_Data',
-			WP_REST_Server::EDITABLE,
-			new Jetpack_IXR_Client( array( 'user_id' => get_current_user_id() ) ),
-			self::get_updateable_parameters()
-		);
+		register_rest_route( 'jetpack/v4', '/module/(?P<slug>[a-z\-]+)', array(
+			'methods' => WP_REST_Server::EDITABLE,
+			'callback' => array( $core_api_endpoint, 'process' ),
+			'permission_callback' => array( $core_api_endpoint, 'can_request' ),
+			'args' => self::get_updateable_parameters( 'any' )
+		) );
 
 		// Get data for a specific module, i.e. Protect block count, WPCOM stats,
 		// Akismet spam count, etc.
-		self::route(
-			'/module/(?P<slug>[a-z\-]+)/data',
-			'Jetpack_Core_API_Module_Data_Endpoint',
-			WP_REST_Server::READABLE,
-			NULL,
-			array(
+		register_rest_route( 'jetpack/v4', '/module/(?P<slug>[a-z\-]+)/data', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => array( $module_data_endpoint, 'process' ),
+			'permission_callback' => array( $module_data_endpoint, 'can_request' ),
+			'args' => array(
 				'range' => array(
 					'default'           => 'day',
 					'type'              => 'string',
@@ -197,31 +368,51 @@ class Jetpack_Core_Json_Api_Endpoints {
 					'validate_callback' => __CLASS__ . '::validate_string',
 				),
 			)
-		);
+		) );
+
+		// Check if the API key for a specific service is valid or not
+		register_rest_route( 'jetpack/v4', '/module/(?P<service>[a-z\-]+)/key/check', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => array( $module_data_endpoint, 'key_check' ),
+			'permission_callback' => __CLASS__ . '::update_settings_permission_check',
+			'sanitize_callback' => 'sanitize_text_field',
+		) );
+
+		register_rest_route( 'jetpack/v4', '/module/(?P<service>[a-z\-]+)/key/check', array(
+			'methods' => WP_REST_Server::EDITABLE,
+			'callback' => array( $module_data_endpoint, 'key_check' ),
+			'permission_callback' => __CLASS__ . '::update_settings_permission_check',
+			'sanitize_callback' => 'sanitize_text_field',
+			'args' => array(
+				'api_key' => array(
+					'default'           => '',
+					'type'              => 'string',
+					'validate_callback' => __CLASS__ . '::validate_alphanum',
+				),
+			)
+		) );
 
 		// Update any Jetpack module option or setting
-		self::route(
-			'/settings',
-			'Jetpack_Core_API_Data',
-			WP_REST_Server::EDITABLE,
-			new Jetpack_IXR_Client( array( 'user_id' => get_current_user_id() ) ),
-			self::get_updateable_parameters( 'any' )
-		);
+		register_rest_route( 'jetpack/v4', '/settings', array(
+			'methods' => WP_REST_Server::EDITABLE,
+			'callback' => array( $core_api_endpoint, 'process' ),
+			'permission_callback' => array( $core_api_endpoint, 'can_request' ),
+			'args' => self::get_updateable_parameters( 'any' )
+		) );
 
 		// Update a module
-		self::route(
-			'/settings/(?P<slug>[a-z\-]+)',
-			'Jetpack_Core_API_Data',
-			WP_REST_Server::EDITABLE,
-			new Jetpack_IXR_Client( array( 'user_id' => get_current_user_id() ) ),
-			self::get_updateable_parameters()
-		);
+		register_rest_route( 'jetpack/v4', '/settings/(?P<slug>[a-z\-]+)', array(
+			'methods' => WP_REST_Server::EDITABLE,
+			'callback' => array( $core_api_endpoint, 'process' ),
+			'permission_callback' => array( $core_api_endpoint, 'can_request' ),
+			'args' => self::get_updateable_parameters()
+		) );
 
-		// Return miscellaneous settings
-		register_rest_route( 'jetpack/v4', '/settings', array(
+		// Return all module settings
+		register_rest_route( 'jetpack/v4', '/settings/', array(
 			'methods' => WP_REST_Server::READABLE,
-			'callback' => __CLASS__ . '::get_settings',
-			'permission_callback' => __CLASS__ . '::view_admin_page_permission_check',
+			'callback' => array( $core_api_endpoint, 'process' ),
+			'permission_callback' => array( $core_api_endpoint, 'can_request' ),
 		) );
 
 		// Reset all Jetpack options
@@ -229,19 +420,6 @@ class Jetpack_Core_Json_Api_Endpoints {
 			'methods' => WP_REST_Server::EDITABLE,
 			'callback' => __CLASS__ . '::reset_jetpack_options',
 			'permission_callback' => __CLASS__ . '::manage_modules_permission_check',
-		) );
-
-		// Jumpstart
-		register_rest_route( 'jetpack/v4', '/jumpstart', array(
-			'methods' => WP_REST_Server::EDITABLE,
-			'callback' => __CLASS__ . '::jumpstart_toggle',
-			'permission_callback' => __CLASS__ . '::manage_modules_permission_check',
-			'args' => array(
-				'active' => array(
-					'required' => true,
-					'validate_callback' => __CLASS__  . '::validate_boolean',
-				),
-			),
 		) );
 
 		// Updates: get number of plugin updates available
@@ -265,49 +443,437 @@ class Jetpack_Core_Json_Api_Endpoints {
 			'permission_callback' => __CLASS__ . '::activate_plugins_permission_check',
 		) );
 
+		register_rest_route( 'jetpack/v4', '/plugins/akismet/activate', array(
+			'methods' => WP_REST_Server::EDITABLE,
+			'callback' => __CLASS__ . '::activate_akismet',
+			'permission_callback' => __CLASS__ . '::activate_plugins_permission_check',
+		) );
+
 		// Plugins: check if the plugin is active.
 		register_rest_route( 'jetpack/v4', '/plugin/(?P<plugin>[a-z\/\.\-_]+)', array(
 			'methods' => WP_REST_Server::READABLE,
 			'callback' => __CLASS__ . '::get_plugin',
 			'permission_callback' => __CLASS__ . '::activate_plugins_permission_check',
 		) );
-	}
 
-	public static function route( $path, $classname, $method,
-		$constructor_arguments = NULL,
-		$endpoint_arguments = NULL
-	) {
-		if ( ! empty( $constructor_arguments ) ) {
-			$endpoint = new $classname( $constructor_arguments );
-		} else {
-			$endpoint = new $classname();
-		}
+		// Widgets: get information about a widget that supports it.
+		register_rest_route( 'jetpack/v4', '/widgets/(?P<id>[0-9a-z\-_]+)', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => array( $widget_endpoint, 'process' ),
+			'permission_callback' => array( $widget_endpoint, 'can_request' ),
+		) );
 
-		$parameters = array(
-			'methods' => $method,
-			'callback' => array( $endpoint, 'process' ),
-			'permission_callback' => array( $endpoint, 'can_request' )
+		// Site Verify: check if the site is verified, and a get verification token if not
+		register_rest_route( 'jetpack/v4', '/verify-site/(?P<service>[a-z\-_]+)', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => __CLASS__ . '::is_site_verified_and_token',
+			'permission_callback' => __CLASS__ . '::update_settings_permission_check',
+		) );
+
+		register_rest_route( 'jetpack/v4', '/verify-site/(?P<service>[a-z\-_]+)/(?<keyring_id>[0-9]+)', array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => __CLASS__ . '::is_site_verified_and_token',
+			'permission_callback' => __CLASS__ . '::update_settings_permission_check',
+		) );
+
+		// Site Verify: tell a service to verify the site
+		register_rest_route( 'jetpack/v4', '/verify-site/(?P<service>[a-z\-_]+)', array(
+			'methods' => WP_REST_Server::EDITABLE,
+			'callback' => __CLASS__ . '::verify_site',
+			'permission_callback' => __CLASS__ . '::update_settings_permission_check',
+			'args' => array(
+				'keyring_id' => array(
+					'required'          => true,
+					'type'              => 'integer',
+					'validate_callback' => __CLASS__  . '::validate_posint',
+				),
+			)
+		) );
+
+		// Get and set API keys.
+		// Note: permission_callback intentionally omitted from the GET method.
+		// Map block requires open access to API keys on the front end.
+		register_rest_route(
+			'jetpack/v4',
+			'/service-api-keys/(?P<service>[a-z\-_]+)',
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => __CLASS__ . '::get_service_api_key',
+				),
+				array(
+					'methods'             => WP_REST_Server::EDITABLE,
+					'callback'            => __CLASS__ . '::update_service_api_key',
+					'permission_callback' => array( 'WPCOM_REST_API_V2_Endpoint_Service_API_Keys','edit_others_posts_check' ),
+					'args'                => array(
+						'service_api_key' => array(
+							'required' => true,
+							'type'     => 'text',
+						),
+					),
+				),
+				array(
+					'methods'             => WP_REST_Server::DELETABLE,
+					'callback'            => __CLASS__ . '::delete_service_api_key',
+					'permission_callback' => array( 'WPCOM_REST_API_V2_Endpoint_Service_API_Keys','edit_others_posts_check' ),
+				),
+			)
 		);
 
-		if ( ! empty( $endpoint_arguments ) ) {
-			$parameters['args'] = $endpoint_arguments;
+		register_rest_route(
+			'jetpack/v4',
+			'/mobile/send-login-email',
+			array(
+				'methods'             => WP_REST_Server::EDITABLE,
+				'callback'            => __CLASS__ . '::send_mobile_magic_link',
+				'permission_callback' => __CLASS__ . '::view_admin_page_permission_check',
+			)
+		);
+
+		/*
+		 * Get and update settings from the Jetpack wizard.
+		 */
+		register_rest_route(
+			'jetpack/v4',
+			'/setup/questionnaire',
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => __CLASS__ . '::get_setup_wizard_questionnaire',
+					'permission_callback' => __CLASS__ . '::update_settings_permission_check',
+				),
+				array(
+					'methods'             => WP_REST_Server::EDITABLE,
+					'callback'            => __CLASS__ . '::update_setup_wizard_questionnaire',
+					'permission_callback' => __CLASS__ . '::update_settings_permission_check',
+					'args'                => array(
+						'questionnaire' => array(
+							'required'          => false,
+							'type'              => 'object',
+							'validate_callback' => __CLASS__ . '::validate_setup_wizard_questionnaire',
+						),
+						'status'        => array(
+							'required'          => false,
+							'type'              => 'string',
+							'validate_callback' => __CLASS__ . '::validate_string',
+						),
+					),
+				),
+			)
+		);
+	}
+
+	/**
+	 * Get the settings for the wizard questionnaire
+	 *
+	 * @return array Questionnaire settings.
+	 */
+	public static function get_setup_wizard_questionnaire() {
+		return Jetpack_Options::get_option( 'setup_wizard_questionnaire', (object) array() );
+	}
+
+	/**
+	 * Update the settings selected on the wizard questionnaire
+	 *
+	 * @param WP_REST_Request $request The request.
+	 *
+	 * @return bool true.
+	 */
+	public static function update_setup_wizard_questionnaire( $request ) {
+		$questionnaire = $request['questionnaire'];
+		if ( ! empty( $questionnaire ) ) {
+			Jetpack_Options::update_option( 'setup_wizard_questionnaire', $questionnaire );
 		}
 
-		register_rest_route( 'jetpack/v4', $path, $parameters );
+		$status = $request['status'];
+		if ( ! empty( $status ) ) {
+			Jetpack_Options::update_option( 'setup_wizard_status', $status );
+		}
+
+		return true;
 	}
+
+	/**
+	 * Validate the answers on the setup wizard questionnaire
+	 *
+	 * @param array           $value Value to check received by request.
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
+	 * @param string          $param Name of the parameter passed to endpoint holding $value.
+	 *
+	 * @return bool|WP_Error
+	 */
+	public static function validate_setup_wizard_questionnaire( $value, $request, $param ) {
+		if ( ! is_array( $value ) ) {
+			/* translators: Name of a parameter that must be an object */
+			return new WP_Error( 'invalid_param', sprintf( esc_html__( '%s must be an object.', 'jetpack' ), $param ) );
+		}
+
+		foreach ( $value as $answer_key => $answer ) {
+			if ( is_string( $answer ) ) {
+				$validate = self::validate_string( $answer, $request, $param );
+			} else {
+				$validate = self::validate_boolean( $answer, $request, $param );
+			}
+
+			if ( is_wp_error( $validate ) ) {
+				return $validate;
+			}
+		}
+
+		return true;
+	}
+
+	public static function get_plans( $request ) {
+		$request = Client::wpcom_json_api_request_as_user(
+			'/plans?_locale=' . get_user_locale(),
+			'2',
+			array(
+				'method'  => 'GET',
+				'headers' => array(
+					'X-Forwarded-For' => Jetpack::current_user_ip( true ),
+				),
+			)
+		);
+
+		$body = json_decode( wp_remote_retrieve_body( $request ) );
+		if ( 200 === wp_remote_retrieve_response_code( $request ) ) {
+			$data = $body;
+		} else {
+			// something went wrong so we'll just return the response without caching
+			return $body;
+		}
+
+		return $data;
+	}
+
+	/**
+	 * Gets the WP.com products that are in use on wpcom.
+	 * Similar to the WP.com plans that we currently in user on WPCOM.
+	 *
+	 * @param WP_REST_Request $request The request.
+	 *
+	 * @return string|WP_Error A JSON object of wpcom products if the request was successful, or a WP_Error otherwise.
+	 */
+	public static function get_products( $request ) {
+		$wpcom_request = Client::wpcom_json_api_request_as_user(
+			'/products?_locale=' . get_user_locale() . '&type=jetpack',
+			'2',
+			array(
+				'method'  => 'GET',
+				'headers' => array(
+					'X-Forwarded-For' => Jetpack::current_user_ip( true ),
+				),
+			)
+		);
+
+		$response_code = wp_remote_retrieve_response_code( $wpcom_request );
+		if ( 200 === $response_code ) {
+			return json_decode( wp_remote_retrieve_body( $wpcom_request ) );
+		} else {
+			// Something went wrong so we'll just return the response without caching.
+			return new WP_Error(
+				'failed_to_fetch_data',
+				esc_html__( 'Unable to fetch the requested data.', 'jetpack' ),
+				array( 'status' => $response_code )
+			);
+		}
+	}
+
+	public static function submit_survey( $request ) {
+
+		$wpcom_request = Client::wpcom_json_api_request_as_user(
+			'/marketing/survey',
+			'v2',
+			array(
+				'method'  => 'POST',
+				'headers' => array(
+					'Content-Type'    => 'application/json',
+					'X-Forwarded-For' => Jetpack::current_user_ip( true ),
+				),
+			),
+			$request->get_json_params()
+		);
+
+		$wpcom_request_body = json_decode( wp_remote_retrieve_body( $wpcom_request ) );
+		if ( 200 === wp_remote_retrieve_response_code( $wpcom_request ) ) {
+			$data = $wpcom_request_body;
+		} else {
+			// something went wrong so we'll just return the response without caching
+			return $wpcom_request_body;
+		}
+
+		return $data;
+	}
+
+	/**
+	 * Asks for a jitm, unless they've been disabled, in which case it returns an empty array
+	 *
+	 * @param $request WP_REST_Request
+	 *
+	 * @return array An array of jitms
+	 */
+	public static function get_jitm_message( $request ) {
+		$jitm = JITM::get_instance();
+
+		if ( ! $jitm->register() ) {
+			return array();
+		}
+
+		return $jitm->get_messages( $request['message_path'], urldecode_deep( $request['query'] ), 'true' === $request['full_jp_logo_exists'] ? true : false );
+	}
+
+	/**
+	 * Dismisses a jitm
+	 * @param $request WP_REST_Request The request
+	 *
+	 * @return bool Always True
+	 */
+	public static function delete_jitm_message( $request ) {
+		$jitm = JITM::get_instance();
+
+		if ( ! $jitm->register() ) {
+			return true;
+		}
+
+		return $jitm->dismiss( $request['id'], $request['feature_class'] );
+	}
+
+	/**
+	 * Checks if this site has been verified using a service - only 'google' supported at present - and a specfic
+	 *  keyring to use to get the token if it is not
+	 *
+	 * Returns 'verified' = true/false, and a token if 'verified' is false and site is ready for verification
+	 *
+	 * @since 6.6.0
+	 *
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
+	 *
+	 * @return array|wp-error
+	 */
+	public static function is_site_verified_and_token( $request ) {
+		/**
+		 * Return an error if the site uses a Maintenance / Coming Soon plugin
+		 * and if the plugin is configured to make the site private.
+		 *
+		 * We currently handle the following plugins:
+		 * - https://github.com/mojoness/mojo-marketplace-wp-plugin (used by bluehost)
+		 * - https://wordpress.org/plugins/mojo-under-construction
+		 * - https://wordpress.org/plugins/under-construction-page
+		 * - https://wordpress.org/plugins/ultimate-under-construction
+		 * - https://wordpress.org/plugins/coming-soon
+		 *
+		 * You can handle this in your own plugin thanks to the `jetpack_is_under_construction_plugin` filter.
+		 * If the filter returns true, we will consider the site as under construction.
+		 */
+		$mm_coming_soon                       = get_option( 'mm_coming_soon', null );
+		$under_construction_activation_status = get_option( 'underConstructionActivationStatus', null );
+		$ucp_options                          = get_option( 'ucp_options', array() );
+		$uuc_settings                         = get_option( 'uuc_settings', array() );
+		$csp4                                 = get_option( 'seed_csp4_settings_content', array() );
+		if (
+			( Jetpack::is_plugin_active( 'mojo-marketplace-wp-plugin/mojo-marketplace.php' ) && 'true' === $mm_coming_soon )
+			|| Jetpack::is_plugin_active( 'mojo-under-construction/mojo-contruction.php' ) && 1 == $under_construction_activation_status // WPCS: loose comparison ok.
+			|| ( Jetpack::is_plugin_active( 'under-construction-page/under-construction.php' ) && isset( $ucp_options['status'] ) && 1 == $ucp_options['status'] ) // WPCS: loose comparison ok.
+			|| ( Jetpack::is_plugin_active( 'ultimate-under-construction/ultimate-under-construction.php' ) && isset( $uuc_settings['enable'] ) && 1 == $uuc_settings['enable'] ) // WPCS: loose comparison ok.
+			|| ( Jetpack::is_plugin_active( 'coming-soon/coming-soon.php' ) &&  isset( $csp4['status'] ) && ( 1 == $csp4['status'] || 2 == $csp4['status'] ) ) // WPCS: loose comparison ok.
+			/**
+			 * Allow plugins to mark a site as "under construction".
+			 *
+			 * @since 6.7.0
+			 *
+			 * @param false bool Is the site under construction? Default to false.
+			 */
+			|| true === apply_filters( 'jetpack_is_under_construction_plugin', false )
+		) {
+			return new WP_Error( 'forbidden', __( 'Site is under construction and cannot be verified', 'jetpack' ) );
+		}
+
+ 		$xml = new Jetpack_IXR_Client( array(
+ 			'user_id' => get_current_user_id(),
+		) );
+
+		$args = array(
+			'user_id' => get_current_user_id(),
+			'service' => $request[ 'service' ],
+		);
+
+		if ( isset( $request[ 'keyring_id' ] ) ) {
+			$args[ 'keyring_id' ] = $request[ 'keyring_id' ];
+		}
+
+		$xml->query( 'jetpack.isSiteVerified', $args );
+
+		if ( $xml->isError() ) {
+			return new WP_Error( 'error_checking_if_site_verified_google', sprintf( '%s: %s', $xml->getErrorCode(), $xml->getErrorMessage() ) );
+		} else {
+			return $xml->getResponse();
+		}
+	}
+
+
+
+	public static function verify_site( $request ) {
+		$xml = new Jetpack_IXR_Client( array(
+			'user_id' => get_current_user_id(),
+		) );
+
+		$params = $request->get_json_params();
+
+		$xml->query( 'jetpack.verifySite', array(
+				'user_id' => get_current_user_id(),
+				'service' => $request[ 'service' ],
+				'keyring_id' => $params[ 'keyring_id' ],
+			)
+		);
+
+		if ( $xml->isError() ) {
+			return new WP_Error( 'error_verifying_site_google', sprintf( '%s: %s', $xml->getErrorCode(), $xml->getErrorMessage() ) );
+		} else {
+			$response = $xml->getResponse();
+
+			if ( ! empty( $response['errors'] ) ) {
+				$error = new WP_Error;
+				$error->errors = $response['errors'];
+				return $error;
+			}
+
+			return $response;
+		}
+	}
+
+	/**
+	 * Handles verification that a site is registered
+	 *
+	 * @since 5.4.0
+	 *
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
+	 *
+	 * @return array|wp-error
+	 */
+	 public static function remote_authorize( $request ) {
+		$xmlrpc_server = new Jetpack_XMLRPC_Server();
+		$result = $xmlrpc_server->remote_authorize( $request );
+
+		if ( is_a( $result, 'IXR_Error' ) ) {
+			$result = new WP_Error( $result->code, $result->message );
+		}
+
+		return $result;
+	 }
 
 	/**
 	 * Handles dismissing of Jetpack Notices
 	 *
 	 * @since 4.3.0
 	 *
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
+	 *
 	 * @return array|wp-error
 	 */
-	public static function dismiss_notice( $data ) {
-		$notice = $data['notice'];
-		$param = $data->get_json_params();
+	public static function dismiss_notice( $request ) {
+		$notice = $request['notice'];
 
-		if ( ! isset( $param['dismissed'] ) || $param['dismissed'] !== true ) {
+		if ( ! isset( $request['dismissed'] ) || $request['dismissed'] !== true ) {
 			return new WP_Error( 'invalid_param', esc_html__( 'Invalid parameter "dismissed".', 'jetpack' ), array( 'status' => 404 ) );
 		}
 
@@ -356,7 +922,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 			return true;
 		}
 
-		return new WP_Error( 'invalid_user_permission_jetpack_disconnect', self::$user_permissions_error_msg, array( 'status' => self::rest_authorization_required_code() ) );
+		return new WP_Error( 'invalid_user_permission_jetpack_connect', self::$user_permissions_error_msg, array( 'status' => self::rest_authorization_required_code() ) );
 
 	}
 
@@ -376,6 +942,22 @@ class Jetpack_Core_Json_Api_Endpoints {
 		}
 
 		return new WP_Error( 'invalid_user_permission_user_connection_data', self::$user_permissions_error_msg, array( 'status' => self::rest_authorization_required_code() ) );
+	}
+
+	/**
+	 * Check that user has permission to change the master user.
+	 *
+	 * @since 6.2.0
+	 * @since 7.7.0 Update so that any user with jetpack_disconnect privs can set owner.
+	 *
+	 * @return bool|WP_Error True if user is able to change master user.
+	 */
+	public static function set_connection_owner_permission_callback() {
+		if ( current_user_can( 'jetpack_disconnect' ) ) {
+			return true;
+		}
+
+		return new WP_Error( 'invalid_user_permission_set_connection_owner', self::$user_permissions_error_msg, array( 'status' => self::rest_authorization_required_code() ) );
 	}
 
 	/**
@@ -486,6 +1068,19 @@ class Jetpack_Core_Json_Api_Endpoints {
 	}
 
 	/**
+	 * Verify that user can edit other's posts (Editors and Administrators).
+	 *
+	 * @return bool Whether user has the capability 'edit_others_posts'.
+	 */
+	public static function edit_others_posts_check() {
+		if ( current_user_can( 'edit_others_posts' ) ) {
+			return true;
+		}
+
+		return new WP_Error( 'invalid_user_permission_edit_others_posts', self::$user_permissions_error_msg, array( 'status' => self::rest_authorization_required_code() ) );
+	}
+
+	/**
 	 * Contextual HTTP error code for authorization failure.
 	 *
 	 * Taken from rest_authorization_required_code() in WP-API plugin until is added to core.
@@ -507,16 +1102,312 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @return bool True if site is connected
 	 */
 	public static function jetpack_connection_status() {
+		$status = new Status();
 		return rest_ensure_response( array(
-				'isActive'  => Jetpack::is_active(),
-				'isStaging' => Jetpack::is_staging_site(),
-				'devMode'   => array(
-					'isActive' => Jetpack::is_development_mode(),
-					'constant' => defined( 'JETPACK_DEV_DEBUG' ) && JETPACK_DEV_DEBUG,
-					'url'      => site_url() && false === strpos( site_url(), '.' ),
-					'filter'   => apply_filters( 'jetpack_development_mode', false ),
+			'isActive'     => Jetpack::is_active(),
+			'isStaging'    => $status->is_staging_site(),
+			'isRegistered' => Jetpack::connection()->is_registered(),
+			'devMode'      => array(
+				'isActive' => $status->is_development_mode(),
+				'constant' => defined( 'JETPACK_DEV_DEBUG' ) && JETPACK_DEV_DEBUG,
+				'url'      => site_url() && false === strpos( site_url(), '.' ),
+				'filter'   => apply_filters( 'jetpack_development_mode', false ),
+			),
+			)
+		);
+	}
+
+	/**
+	 * Test connection status for this Jetpack site.
+	 *
+	 * @since 6.8.0
+	 *
+	 * @return array|WP_Error WP_Error returned if connection test does not succeed.
+	 */
+	public static function jetpack_connection_test() {
+		jetpack_require_lib( 'debugger' );
+		$cxntests = new Jetpack_Cxn_Tests();
+
+		if ( $cxntests->pass() ) {
+			return rest_ensure_response(
+				array(
+					'code'    => 'success',
+					'message' => __( 'All connection tests passed.', 'jetpack' ),
+				)
+			);
+		} else {
+			return $cxntests->output_fails_as_wp_error();
+		}
+	}
+
+	/**
+	 * Get plugins connected to the Jetpack.
+	 *
+	 * @return WP_REST_Response|WP_Error Response or error object, depending on the request result.
+	 */
+	public static function get_connection_plugins() {
+		$plugins = ( new Connection_Manager() )->get_connected_plugins();
+
+		if ( is_wp_error( $plugins ) ) {
+			return $plugins;
+		}
+
+		array_walk(
+			$plugins,
+			function( &$data, $slug ) {
+				$data['slug'] = $slug;
+			}
+		);
+
+		return rest_ensure_response( array_values( $plugins ) );
+	}
+
+	/**
+	 * Test connection permission check method.
+	 *
+	 * @since 7.1.0
+	 *
+	 * @return bool
+	 */
+	public static function view_jetpack_connection_test_check() {
+		if ( ! isset( $_GET['signature'], $_GET['timestamp'], $_GET['url'] ) ) {
+			return false;
+		}
+		$signature = base64_decode( $_GET['signature'] );
+
+		$signature_data = wp_json_encode(
+			array(
+				'rest_route' => $_GET['rest_route'],
+				'timestamp' => intval( $_GET['timestamp'] ),
+				'url' => wp_unslash( $_GET['url'] ),
+			)
+		);
+
+		if (
+			! function_exists( 'openssl_verify' )
+			|| 1 !== openssl_verify(
+				$signature_data,
+				$signature,
+				JETPACK__DEBUGGER_PUBLIC_KEY
+			)
+		) {
+			return false;
+		}
+
+		// signature timestamp must be within 5min of current time
+		if ( abs( time() - intval( $_GET['timestamp'] ) ) > 300 ) {
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Test connection status for this Jetpack site, encrypt the results for decryption by a third-party.
+	 *
+	 * @since 7.1.0
+	 *
+	 * @return array|mixed|object|WP_Error
+	 */
+	public static function jetpack_connection_test_for_external() {
+		// Since we are running this test for inclusion in the WP.com testing suite, let's not try to run them as part of these results.
+		add_filter( 'jetpack_debugger_run_self_test', '__return_false' );
+		jetpack_require_lib( 'debugger' );
+		$cxntests = new Jetpack_Cxn_Tests();
+
+		if ( $cxntests->pass() ) {
+			$result = array(
+				'code'    => 'success',
+				'message' => __( 'All connection tests passed.', 'jetpack' ),
+			);
+		} else {
+			$error  = $cxntests->output_fails_as_wp_error(); // Using this so the output is similar both ways.
+			$errors = array();
+
+			// Borrowed from WP_REST_Server::error_to_response().
+			foreach ( (array) $error->errors as $code => $messages ) {
+				foreach ( (array) $messages as $message ) {
+					$errors[] = array(
+						'code'    => $code,
+						'message' => $message,
+						'data'    => $error->get_error_data( $code ),
+					);
+				}
+			}
+
+			$result = ( ! empty( $errors ) ) ? $errors[0] : null;
+			if ( count( $errors ) > 1 ) {
+				// Remove the primary error.
+				array_shift( $errors );
+				$result['additional_errors'] = $errors;
+			}
+		}
+
+		$result = wp_json_encode( $result );
+
+		$encrypted = $cxntests->encrypt_string_for_wpcom( $result );
+
+		if ( ! $encrypted || ! is_array( $encrypted ) ) {
+			return rest_ensure_response(
+				array(
+					'code'    => 'action_required',
+					'message' => 'Please request results from the in-plugin debugger',
+				)
+			);
+		}
+
+		return rest_ensure_response(
+			array(
+				'code'  => 'response',
+				'debug' => array(
+					'data' => $encrypted['data'],
+					'key'  => $encrypted['key'],
 				),
 			)
+		);
+	}
+
+	public static function rewind_data() {
+		$site_id = Jetpack_Options::get_option( 'id' );
+
+		if ( ! $site_id ) {
+			return new WP_Error( 'site_id_missing' );
+		}
+
+		if ( ! isset( $_GET['_cacheBuster'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$rewind_state = get_transient( 'jetpack_rewind_state' );
+			if ( $rewind_state ) {
+				return $rewind_state;
+			}
+		}
+
+		$response = Client::wpcom_json_api_request_as_blog( sprintf( '/sites/%d/rewind', $site_id ) .'?force=wpcom', '2', array(), null, 'wpcom' );
+
+		if ( 200 !== wp_remote_retrieve_response_code( $response ) ) {
+			return new WP_Error( 'rewind_data_fetch_failed' );
+		}
+
+		$body   = wp_remote_retrieve_body( $response );
+		$result = json_decode( $body );
+		set_transient( 'jetpack_rewind_state', $result, 30 * MINUTE_IN_SECONDS );
+
+		return $result;
+	}
+
+	/**
+	 * Get rewind data
+	 *
+	 * @since 5.7.0
+	 *
+	 * @return array Array of rewind properties.
+	 */
+	public static function get_rewind_data() {
+		$rewind_data = self::rewind_data();
+
+		if ( ! is_wp_error( $rewind_data ) ) {
+			return rest_ensure_response( array(
+					'code' => 'success',
+					'message' => esc_html__( 'Backup & Scan data correctly received.', 'jetpack' ),
+					'data' => wp_json_encode( $rewind_data ),
+				)
+			);
+		}
+
+		if ( $rewind_data->get_error_code() === 'rewind_data_fetch_failed' ) {
+			return new WP_Error( 'rewind_data_fetch_failed', esc_html__( 'Failed fetching rewind data. Try again later.', 'jetpack' ), array( 'status' => 400 ) );
+		}
+
+		if ( $rewind_data->get_error_code() === 'site_id_missing' ) {
+			return new WP_Error( 'site_id_missing', esc_html__( 'The ID of this site does not exist.', 'jetpack' ), array( 'status' => 404 ) );
+		}
+
+		return new WP_Error(
+			'error_get_rewind_data',
+			esc_html__( 'Could not retrieve Backup & Scan data.', 'jetpack' ),
+			array( 'status' => 500 )
+		);
+	}
+
+	/**
+	 * Gets Scan state data.
+	 *
+	 * @since 8.5.0
+	 *
+	 * @return array|WP_Error Result from WPCOM API or error.
+	 */
+	public static function scan_state() {
+
+		if ( ! isset( $_GET['_cacheBuster'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$scan_state = get_transient( 'jetpack_scan_state' );
+			if ( ! empty( $scan_state ) ) {
+				return $scan_state;
+			}
+		}
+		$site_id = Jetpack_Options::get_option( 'id' );
+
+		if ( ! $site_id ) {
+			return new WP_Error( 'site_id_missing' );
+		}
+		// The default timeout was too short in come cases.
+		add_filter( 'http_request_timeout', array( __CLASS__, 'increase_timeout_30' ), PHP_INT_MAX - 1 );
+		$response = Client::wpcom_json_api_request_as_blog( sprintf( '/sites/%d/scan', $site_id ) . '?force=wpcom', '2', array(), null, 'wpcom' );
+		remove_filter( 'http_request_timeout', array( __CLASS__, 'increase_timeout_30' ), PHP_INT_MAX - 1 );
+
+		if ( wp_remote_retrieve_response_code( $response ) !== 200 ) {
+			return new WP_Error( 'scan_state_fetch_failed' );
+		}
+
+		$body   = wp_remote_retrieve_body( $response );
+		$result = json_decode( $body );
+		set_transient( 'jetpack_scan_state', $result, 30 * MINUTE_IN_SECONDS );
+
+		return $result;
+	}
+
+	/**
+	 * Increases the request timeout value to 30 seconds.
+	 *
+	 * @return int Always returns 30.
+	 */
+	public static function increase_timeout_30() {
+		return 30; // 30 Seconds
+	}
+
+	/**
+	 * Get Scan state for API.
+	 *
+	 * @since 8.5.0
+	 *
+	 * @return WP_REST_Response|WP_Error REST response or error state.
+	 */
+	public static function get_scan_state() {
+		$scan_state = self::scan_state();
+
+		if ( ! is_wp_error( $scan_state ) ) {
+			if ( jetpack_is_atomic_site() && ! empty( $scan_state->threats ) ) {
+				$scan_state->threats = array();
+			}
+			return rest_ensure_response(
+				array(
+					'code'    => 'success',
+					'message' => esc_html__( 'Scan state correctly received.', 'jetpack' ),
+					'data'    => wp_json_encode( $scan_state ),
+				)
+			);
+		}
+
+		if ( $scan_state->get_error_code() === 'scan_state_fetch_failed' ) {
+			return new WP_Error( 'scan_state_fetch_failed', esc_html__( 'Failed fetching rewind data. Try again later.', 'jetpack' ), array( 'status' => 400 ) );
+		}
+
+		if ( $scan_state->get_error_code() === 'site_id_missing' ) {
+			return new WP_Error( 'site_id_missing', esc_html__( 'The ID of this site does not exist.', 'jetpack' ), array( 'status' => 404 ) );
+		}
+
+		return new WP_Error(
+			'error_get_rewind_data',
+			esc_html__( 'Could not retrieve Scan state.', 'jetpack' ),
+			array( 'status' => 500 )
 		);
 	}
 
@@ -525,12 +1416,14 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 *
 	 * @uses Jetpack::disconnect();
 	 * @since 4.3.0
+	 *
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
+	 *
 	 * @return bool|WP_Error True if Jetpack successfully disconnected.
 	 */
-	public static function disconnect_site( $data ) {
-		$param = $data->get_json_params();
+	public static function disconnect_site( $request ) {
 
-		if ( ! isset( $param['isActive'] ) || $param['isActive'] !== false ) {
+		if ( ! isset( $request['isActive'] ) || $request['isActive'] !== false ) {
 			return new WP_Error( 'invalid_param', esc_html__( 'Invalid Parameter', 'jetpack' ), array( 'status' => 404 ) );
 		}
 
@@ -543,14 +1436,47 @@ class Jetpack_Core_Json_Api_Endpoints {
 	}
 
 	/**
+	 * Registers the Jetpack site
+	 *
+	 * @uses Jetpack::try_registration();
+	 * @since 7.7.0
+	 *
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
+	 *
+	 * @return bool|WP_Error True if Jetpack successfully registered
+	 */
+	public static function register_site( $request ) {
+		if ( ! wp_verify_nonce( $request->get_param( 'registration_nonce' ), 'jetpack-registration-nonce' ) ) {
+			return new WP_Error( 'invalid_nonce', __( 'Unable to verify your request.', 'jetpack' ), array( 'status' => 403 ) );
+		}
+
+		$response = Jetpack::try_registration();
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		return rest_ensure_response(
+			array(
+				'authorizeUrl' => Jetpack::build_authorize_url( false, true )
+			) );
+	}
+
+	/**
 	 * Gets a new connect raw URL with fresh nonce.
 	 *
 	 * @uses Jetpack::disconnect();
 	 * @since 4.3.0
+	 *
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
+	 *
 	 * @return string|WP_Error A raw URL if the connection URL could be built; error message otherwise.
 	 */
-	public static function build_connect_url() {
-		$url = Jetpack::init()->build_connect_url( true, false, false );
+	public static function build_connect_url( $request = array() ) {
+		$from     = isset( $request['from'] ) ? $request['from'] : false;
+		$redirect = isset( $request['redirect'] ) ? $request['redirect'] : false;
+
+		$url = Jetpack::init()->build_connect_url( true, $redirect, $from );
 		if ( $url ) {
 			return rest_ensure_response( $url );
 		}
@@ -559,29 +1485,13 @@ class Jetpack_Core_Json_Api_Endpoints {
 	}
 
 	/**
-	 * Get miscellaneous settings for this Jetpack installation, like Holiday Snow.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @return object $response {
-	 *     Array of miscellaneous settings.
-	 *
-	 *     @type bool $holiday-snow Did Jack steal Christmas?
-	 * }
-	 */
-	public static function get_settings() {
-		$response = array(
-			self::holiday_snow_option_name() => get_option( self::holiday_snow_option_name() ) == 'letitsnow',
-		);
-		return rest_ensure_response( $response );
-	}
-
-	/**
 	 * Get miscellaneous user data related to the connection. Similar data available in old "My Jetpack".
 	 * Information about the master/primary user.
 	 * Information about the current user.
 	 *
 	 * @since 4.3.0
+	 *
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 *
 	 * @return object
 	 */
@@ -596,77 +1506,97 @@ class Jetpack_Core_Json_Api_Endpoints {
 	}
 
 	/**
-	 * Returns the proper name for Jetpack Holiday Snow setting.
-	 * When the REST route starts, the holiday-snow.php file where jetpack_holiday_snow_option_name() function is defined is not loaded,
-	 * so where using this to replicate it and have the same functionality.
+	 * Change the master user.
 	 *
-	 * @since 4.4.0
+	 * @since 6.2.0
 	 *
-	 * @return string
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
+	 *
+	 * @return bool|WP_Error True if owner successfully changed.
 	 */
-	public static function holiday_snow_option_name() {
-		/** This filter is documented in modules/holiday-snow.php */
-		return apply_filters( 'jetpack_holiday_snow_option_name', 'jetpack_holiday_snow_enabled' );
-	}
-
-	/**
-	 * Update a single miscellaneous setting for this Jetpack installation, like Holiday Snow.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_REST_Request $data
-	 *
-	 * @return object Jetpack miscellaneous settings.
-	 */
-	public static function update_setting( $data ) {
-		// Get parameters to update the module.
-		$param = $data->get_json_params();
-
-		// Exit if no parameters were passed.
-		if ( ! is_array( $param ) ) {
-			return new WP_Error( 'missing_setting', esc_html__( 'Missing setting.', 'jetpack' ), array( 'status' => 404 ) );
+	public static function set_connection_owner( $request ) {
+		if ( ! isset( $request['owner'] ) ) {
+			return new WP_Error(
+				'invalid_param',
+				esc_html__( 'Invalid Parameter', 'jetpack' ),
+				array( 'status' => 400 )
+			);
 		}
 
-		// Get option name and value.
-		$option = key( $param );
-		$value  = current( $param );
-
-		// Log success or not
-		$updated = false;
-
-		switch ( $option ) {
-			case self::holiday_snow_option_name():
-				$updated = update_option( $option, ( true == (bool) $value ) ? 'letitsnow' : '' );
-				break;
+		$new_owner_id = $request['owner'];
+		if ( ! user_can( $new_owner_id, 'administrator' ) ) {
+			return new WP_Error(
+				'new_owner_not_admin',
+				esc_html__( 'New owner is not admin', 'jetpack' ),
+				array( 'status' => 400 )
+			);
 		}
 
-		if ( $updated ) {
-			return rest_ensure_response( array(
-				'code' 	  => 'success',
-				'message' => esc_html__( 'Setting updated.', 'jetpack' ),
-				'value'   => $value,
-			) );
+		if ( $new_owner_id === get_current_user_id() ) {
+			return new WP_Error(
+				'new_owner_is_current_user',
+				esc_html__( 'New owner is same as current user', 'jetpack' ),
+				array( 'status' => 400 )
+			);
 		}
 
-		return new WP_Error( 'setting_not_updated', esc_html__( 'The setting was not updated.', 'jetpack' ), array( 'status' => 400 ) );
+		if ( ! Jetpack::is_user_connected( $new_owner_id ) ) {
+			return new WP_Error(
+				'new_owner_not_connected',
+				esc_html__( 'New owner is not connected', 'jetpack' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		// Update the master user in Jetpack
+		$updated = Jetpack_Options::update_option( 'master_user', $new_owner_id );
+
+		// Notify WPCOM about the master user change
+		$xml = new Jetpack_IXR_Client( array(
+			'user_id' => get_current_user_id(),
+		) );
+		$xml->query( 'jetpack.switchBlogOwner', array(
+			'new_blog_owner' => $new_owner_id,
+		) );
+
+		if ( $updated && ! $xml->isError() ) {
+
+			// Track it
+			if ( class_exists( 'Automattic\Jetpack\Tracking' ) ) {
+				$tracking = new Tracking();
+				$tracking->record_user_event( 'set_connection_owner_success' );
+			}
+
+			return rest_ensure_response(
+				array(
+					'code' => 'success',
+				)
+			);
+		}
+		return new WP_Error(
+			'error_setting_new_owner',
+			esc_html__( 'Could not confirm new owner.', 'jetpack' ),
+			array( 'status' => 500 )
+		);
 	}
 
 	/**
 	 * Unlinks current user from the WordPress.com Servers.
 	 *
 	 * @since 4.3.0
-	 * @uses  Jetpack::unlink_user
+	 * @uses  Automattic\Jetpack\Connection\Manager::disconnect_user
+	 *
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 *
 	 * @return bool|WP_Error True if user successfully unlinked.
 	 */
-	public static function unlink_user( $data ) {
-		$param = $data->get_json_params();
+	public static function unlink_user( $request ) {
 
-		if ( ! isset( $param['linked'] ) || $param['linked'] !== false ) {
+		if ( ! isset( $request['linked'] ) || $request['linked'] !== false ) {
 			return new WP_Error( 'invalid_param', esc_html__( 'Invalid Parameter', 'jetpack' ), array( 'status' => 404 ) );
 		}
 
-		if ( Jetpack::unlink_user() ) {
+		if ( Connection_Manager::disconnect_user() ) {
 			return rest_ensure_response(
 				array(
 					'code' => 'success'
@@ -678,37 +1608,189 @@ class Jetpack_Core_Json_Api_Endpoints {
 	}
 
 	/**
+	 * Gets current user's tracking settings.
+	 *
+	 * @since 6.0.0
+	 *
+	 * @param  WP_REST_Request $request The request sent to the WP REST API.
+	 *
+	 * @return WP_REST_Response|WP_Error Response, else error.
+	 */
+	public static function get_user_tracking_settings( $request ) {
+		if ( ! Jetpack::is_user_connected() ) {
+			$response = array(
+				'tracks_opt_out' => true, // Default to opt-out if not connected to wp.com.
+			);
+		} else {
+			$response = Client::wpcom_json_api_request_as_user(
+				'/jetpack-user-tracking',
+				'v2',
+				array(
+					'method'  => 'GET',
+					'headers' => array(
+						'X-Forwarded-For' => Jetpack::current_user_ip( true ),
+					),
+				)
+			);
+			if ( ! is_wp_error( $response ) ) {
+				$response = json_decode( wp_remote_retrieve_body( $response ), true );
+			}
+		}
+
+		return rest_ensure_response( $response );
+	}
+
+	/**
+	 * Updates current user's tracking settings.
+	 *
+	 * @since 6.0.0
+	 *
+	 * @param  WP_REST_Request $request The request sent to the WP REST API.
+	 *
+	 * @return WP_REST_Response|WP_Error Response, else error.
+	 */
+	public static function update_user_tracking_settings( $request ) {
+		if ( ! Jetpack::is_user_connected() ) {
+			$response = array(
+				'tracks_opt_out' => true, // Default to opt-out if not connected to wp.com.
+			);
+		} else {
+			$response = Client::wpcom_json_api_request_as_user(
+				'/jetpack-user-tracking',
+				'v2',
+				array(
+					'method'  => 'PUT',
+					'headers' => array(
+						'Content-Type'    => 'application/json',
+						'X-Forwarded-For' => Jetpack::current_user_ip( true ),
+					),
+				),
+				wp_json_encode( $request->get_params() )
+			);
+			if ( ! is_wp_error( $response ) ) {
+				$response = json_decode( wp_remote_retrieve_body( $response ), true );
+			}
+		}
+
+		return rest_ensure_response( $response );
+	}
+
+	/**
+	 * Fetch site data from .com including the site's current plan.
+	 *
+	 * @since 5.5.0
+	 *
+	 * @return array Array of site properties.
+	 */
+	public static function site_data() {
+		$site_id = Jetpack_Options::get_option( 'id' );
+
+		if ( ! $site_id ) {
+			new WP_Error( 'site_id_missing' );
+		}
+
+		$args = array( 'headers' => array() );
+
+		// Allow use a store sandbox. Internal ref: PCYsg-IA-p2.
+		if ( isset( $_COOKIE ) && isset( $_COOKIE['store_sandbox'] ) ) {
+			$secret                    = $_COOKIE['store_sandbox'];
+			$args['headers']['Cookie'] = "store_sandbox=$secret;";
+		}
+
+		$response = Client::wpcom_json_api_request_as_blog( sprintf( '/sites/%d', $site_id ) .'?force=wpcom', '1.1', $args );
+
+		if ( 200 !== wp_remote_retrieve_response_code( $response ) ) {
+			return new WP_Error( 'site_data_fetch_failed' );
+		}
+
+		Jetpack_Plan::update_from_sites_response( $response );
+
+		$body = wp_remote_retrieve_body( $response );
+
+		return json_decode( $body );
+	}
+	/**
 	 * Get site data, including for example, the site's current plan.
 	 *
 	 * @since 4.3.0
 	 *
-	 * @return array Array of Jetpack modules.
+	 * @return array Array of site properties.
 	 */
 	public static function get_site_data() {
+		$site_data = self::site_data();
 
-		if ( $site_id = Jetpack_Options::get_option( 'id' ) ) {
-			$response = Jetpack_Client::wpcom_json_api_request_as_blog( sprintf( '/sites/%d', $site_id ), '1.1' );
-
-			if ( 200 !== wp_remote_retrieve_response_code( $response ) ) {
-				return new WP_Error( 'site_data_fetch_failed', esc_html__( 'Failed fetching site data. Try again later.', 'jetpack' ), array( 'status' => 400 ) );
-			}
-
-			// Save plan details in the database for future use without API calls
-			$results = json_decode( $response['body'], true );
-
-			if ( is_array( $results ) && isset( $results['plan'] ) ) {
-				update_option( 'jetpack_active_plan', $results['plan'] );
-			}
-
+		if ( ! is_wp_error( $site_data ) ) {
+			/**
+			 * Fires when the site data was successfully returned from the /sites/%d wpcom endpoint.
+			 *
+			 * @since 8.7.0
+			 */
+			do_action( 'jetpack_get_site_data_success' );
 			return rest_ensure_response( array(
 					'code' => 'success',
 					'message' => esc_html__( 'Site data correctly received.', 'jetpack' ),
-					'data' => wp_remote_retrieve_body( $response ),
+					'data' => json_encode( $site_data ),
 				)
 			);
 		}
+		if ( $site_data->get_error_code() === 'site_data_fetch_failed' ) {
+			return new WP_Error( 'site_data_fetch_failed', esc_html__( 'Failed fetching site data from WordPress.com. If the problem persists, try reconnecting Jetpack.', 'jetpack' ), array( 'status' => 400 ) );
+		}
 
-		return new WP_Error( 'site_id_missing', esc_html__( 'The ID of this site does not exist.', 'jetpack' ), array( 'status' => 404 ) );
+		if ( $site_data->get_error_code() === 'site_id_missing' ) {
+			return new WP_Error( 'site_id_missing', esc_html__( 'The ID of this site does not exist.', 'jetpack' ), array( 'status' => 404 ) );
+		}
+	}
+
+	/**
+	 * Fetch AL data for this site and return it.
+	 *
+	 * @since 7.4
+	 *
+	 * @return array|WP_Error
+	 */
+	public static function get_site_activity() {
+		$site_id = Jetpack_Options::get_option( 'id' );
+
+		if ( ! $site_id ) {
+			return new WP_Error(
+				'site_id_missing',
+				esc_html__( 'Site ID is missing.', 'jetpack' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$response = Client::wpcom_json_api_request_as_user( "/sites/$site_id/activity", '2', array(
+			'method'  => 'GET',
+			'headers' => array(
+				'X-Forwarded-For' => Jetpack::current_user_ip( true ),
+			),
+		), null, 'wpcom' );
+		$response_code = wp_remote_retrieve_response_code( $response );
+
+		if ( 200 !== $response_code ) {
+			return new WP_Error(
+				'activity_fetch_failed',
+				esc_html__( 'Could not retrieve site activity.', 'jetpack' ),
+				array( 'status' => $response_code )
+			);
+		}
+
+		$data = json_decode( wp_remote_retrieve_body( $response ) );
+
+		if ( ! isset( $data->current->orderedItems ) ) {
+			return new WP_Error(
+				'activity_not_found',
+				esc_html__( 'No activity found', 'jetpack' ),
+				array( 'status' => 204 ) // no content
+			);
+		}
+
+		return rest_ensure_response( array(
+				'code' => 'success',
+				'data' => $data->current->orderedItems,
+			)
+		);
 	}
 
 	/**
@@ -785,7 +1867,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 *
 	 * @since 4.3.0
 	 *
-	 * @param WP_REST_Request $data {
+	 * @param WP_REST_Request $request {
 	 *     Array of parameters received by request.
 	 *
 	 *     @type string $options Available options to reset are options|modules
@@ -793,15 +1875,14 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 *
 	 * @return bool|WP_Error True if options were reset. Otherwise, a WP_Error instance with the corresponding error.
 	 */
-	public static function reset_jetpack_options( $data ) {
-		$param = $data->get_json_params();
+	public static function reset_jetpack_options( $request ) {
 
-		if ( ! isset( $param['reset'] ) || $param['reset'] !== true ) {
+		if ( ! isset( $request['reset'] ) || $request['reset'] !== true ) {
 			return new WP_Error( 'invalid_param', esc_html__( 'Invalid Parameter', 'jetpack' ), array( 'status' => 404 ) );
 		}
 
-		if ( isset( $data['options'] ) ) {
-			$data = $data['options'];
+		if ( isset( $request['options'] ) ) {
+			$data = $request['options'];
 
 			switch( $data ) {
 				case ( 'options' ) :
@@ -820,8 +1901,6 @@ class Jetpack_Core_Json_Api_Endpoints {
 					$default_modules = Jetpack::get_default_modules();
 					Jetpack::update_active_modules( $default_modules );
 
-					// Jumpstart option is special
-					Jetpack_Options::update_option( 'jumpstart', 'new_connection' );
 					return rest_ensure_response( array(
 						'code' 	  => 'success',
 						'message' => esc_html__( 'Jetpack options reset.', 'jetpack' ),
@@ -843,143 +1922,6 @@ class Jetpack_Core_Json_Api_Endpoints {
 		}
 
 		return new WP_Error( 'required_param', esc_html__( 'Missing parameter "type".', 'jetpack' ), array( 'status' => 404 ) );
-	}
-
-	/**
-	 * Toggles activation or deactivation of the JumpStart
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_REST_Request $data {
-	 *     Array of parameters received by request.
-	 * }
-	 *
-	 * @return bool|WP_Error True if toggling Jumpstart succeeded. Otherwise, a WP_Error instance with the corresponding error.
-	 */
-	public static function jumpstart_toggle( $data ) {
-		$param = $data->get_json_params();
-
-		if ( $param[ 'active' ] ) {
-			return self::jumpstart_activate( $data );
-		} else {
-			return self::jumpstart_deactivate( $data );
-		}
-	}
-
-	/**
-	 * Activates a series of valid Jetpack modules and initializes some options.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_REST_Request $data {
-	 *     Array of parameters received by request.
-	 * }
-	 *
-	 * @return bool|WP_Error True if Jumpstart succeeded. Otherwise, a WP_Error instance with the corresponding error.
-	 */
-	public static function jumpstart_activate( $data ) {
-		$modules = Jetpack::get_available_modules();
-		$activate_modules = array();
-		foreach ( $modules as $module ) {
-			$module_info = Jetpack::get_module( $module );
-			if ( isset( $module_info['feature'] ) && is_array( $module_info['feature'] ) && in_array( 'Jumpstart', $module_info['feature'] ) ) {
-				$activate_modules[] = $module;
-			}
-		}
-
-		// Collect success/error messages like modules that are properly activated.
-		$result = array(
-			'activated_modules' => array(),
-			'failed_modules'    => array(),
-		);
-
-		// Update the jumpstart option
-		if ( 'new_connection' === Jetpack_Options::get_option( 'jumpstart' ) ) {
-			$result['jumpstart_activated'] = Jetpack_Options::update_option( 'jumpstart', 'jumpstart_activated' );
-		}
-
-		// Check for possible conflicting plugins
-		$module_slugs_filtered = Jetpack::init()->filter_default_modules( $activate_modules );
-
-		foreach ( $module_slugs_filtered as $module_slug ) {
-			Jetpack::log( 'activate', $module_slug );
-			if ( Jetpack::activate_module( $module_slug, false, false ) ) {
-				$result['activated_modules'][] = $module_slug;
-			} else {
-				$result['failed_modules'][] = $module_slug;
-			}
-		}
-
-		// Set the default sharing buttons and set to display on posts if none have been set.
-		$sharing_services = get_option( 'sharing-services' );
-		$sharing_options  = get_option( 'sharing-options' );
-		if ( empty( $sharing_services['visible'] ) ) {
-			// Default buttons to set
-			$visible = array(
-				'twitter',
-				'facebook',
-				'google-plus-1',
-			);
-			$hidden = array();
-
-			// Set some sharing settings
-			if ( class_exists( 'Sharing_Service' ) ) {
-				$sharing = new Sharing_Service();
-				$sharing_options['global'] = array(
-					'button_style'  => 'icon',
-					'sharing_label' => $sharing->default_sharing_label,
-					'open_links'    => 'same',
-					'show'          => array( 'post' ),
-					'custom'        => isset( $sharing_options['global']['custom'] ) ? $sharing_options['global']['custom'] : array()
-				);
-
-				$result['sharing_options']  = update_option( 'sharing-options', $sharing_options );
-				$result['sharing_services'] = update_option( 'sharing-services', array( 'visible' => $visible, 'hidden' => $hidden ) );
-			}
-		}
-
-		// If all Jumpstart modules were activated
-		if ( empty( $result['failed_modules'] ) ) {
-			return rest_ensure_response( array(
-				'code' 	  => 'success',
-				'message' => esc_html__( 'Jumpstart done.', 'jetpack' ),
-				'data'    => $result,
-			) );
-		}
-
-		return new WP_Error( 'jumpstart_failed', esc_html( sprintf( _n( 'Jumpstart failed activating this module: %s.', 'Jumpstart failed activating these modules: %s.', count( $result['failed_modules'] ), 'jetpack' ), join( ', ', $result['failed_modules'] ) ) ), array( 'status' => 400 ) );
-	}
-
-	/**
-	 * Dismisses Jumpstart so user is not prompted to go through it again.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_REST_Request $data {
-	 *     Array of parameters received by request.
-	 * }
-	 *
-	 * @return bool|WP_Error True if Jumpstart was disabled or was nothing to dismiss. Otherwise, a WP_Error instance with a message.
-	 */
-	public static function jumpstart_deactivate( $data ) {
-
-		// If dismissed, flag the jumpstart option as such.
-		if ( 'new_connection' === Jetpack_Options::get_option( 'jumpstart' ) ) {
-			if ( Jetpack_Options::update_option( 'jumpstart', 'jumpstart_dismissed' ) ) {
-				return rest_ensure_response( array(
-					'code' 	  => 'success',
-					'message' => esc_html__( 'Jumpstart dismissed.', 'jetpack' ),
-				) );
-			} else {
-				return new WP_Error( 'jumpstart_failed_dismiss', esc_html__( 'Jumpstart could not be dismissed.', 'jetpack' ), array( 'status' => 400 ) );
-			}
-		}
-
-		// If this was not a new connection and there was nothing to dismiss, don't fail.
-		return rest_ensure_response( array(
-			'code' 	  => 'success',
-			'message' => esc_html__( 'Nothing to dismiss. This was not a new connection.', 'jetpack' ),
-		) );
 	}
 
 	/**
@@ -1021,7 +1963,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 
 			// Carousel
 			'carousel_background_color' => array(
-				'description'       => esc_html__( 'Background color.', 'jetpack' ),
+				'description'       => esc_html__( 'Color scheme.', 'jetpack' ),
 				'type'              => 'string',
 				'default'           => 'black',
 				'enum'              => array(
@@ -1036,9 +1978,16 @@ class Jetpack_Core_Json_Api_Endpoints {
 				'jp_group'          => 'carousel',
 			),
 			'carousel_display_exif' => array(
-				'description'       => wp_kses( sprintf( __( 'Show photo metadata (<a href="http://en.wikipedia.org/wiki/Exchangeable_image_file_format" target="_blank">Exif</a>) in carousel, when available.', 'jetpack' ) ), array( 'a' => array( 'href' => true, 'target' => true ) ) ),
+				'description'       => wp_kses( sprintf( __( 'Show photo metadata (<a href="https://en.wikipedia.org/wiki/Exchangeable_image_file_format" target="_blank">Exif</a>) in carousel, when available.', 'jetpack' ) ), array( 'a' => array( 'href' => true, 'target' => true ) ) ),
 				'type'              => 'boolean',
 				'default'           => 0,
+				'validate_callback' => __CLASS__ . '::validate_boolean',
+				'jp_group'          => 'carousel',
+			),
+			'carousel_display_comments'            => array(
+				'description'       => esc_html__( 'Show comments area in carousel', 'jetpack' ),
+				'type'              => 'boolean',
+				'default'           => 1,
 				'validate_callback' => __CLASS__ . '::validate_boolean',
 				'jp_group'          => 'carousel',
 			),
@@ -1052,7 +2001,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 				'jp_group'          => 'comments',
 			),
 			'jetpack_comment_form_color_scheme' => array(
-				'description'       => esc_html__( "Color Scheme", 'jetpack' ),
+				'description'       => esc_html__( "Color scheme", 'jetpack' ),
 				'type'              => 'string',
 				'default'           => 'light',
 				'enum'              => array(
@@ -1173,44 +2122,12 @@ class Jetpack_Core_Json_Api_Endpoints {
 				'validate_callback' => __CLASS__ . '::validate_boolean',
 				'jp_group'          => 'markdown',
 			),
-
-			// Mobile Theme
-			'wp_mobile_excerpt' => array(
-				'description'       => esc_html__( 'Excerpts', 'jetpack' ),
-				'type'              => 'string',
-				'default'           => 'disabled',
-				'enum'              => array(
-					'enabled',
-					'disabled',
-				),
-				'enum_labels' => array(
-					'enabled'  => esc_html__( 'Enable excerpts on front page and on archive pages', 'jetpack' ),
-					'disabled' => esc_html__( 'Show full posts on front page and on archive pages', 'jetpack' ),
-				),
-				'validate_callback' => __CLASS__ . '::validate_list_item',
-				'jp_group'          => 'minileven',
-			),
-			'wp_mobile_featured_images' => array(
-				'description'       => esc_html__( 'Featured Images', 'jetpack' ),
-				'type'              => 'string',
-				'default'           => 'disabled',
-				'enum'              => array(
-					'enabled',
-					'disabled',
-				),
-				'enum_labels' => array(
-					'enabled'  => esc_html__( 'Display featured images', 'jetpack' ),
-					'disabled' => esc_html__( 'Hide all featured images', 'jetpack' ),
-				),
-				'validate_callback' => __CLASS__ . '::validate_list_item',
-				'jp_group'          => 'minileven',
-			),
-			'wp_mobile_app_promos' => array(
-				'description'       => esc_html__( 'Show a promo for the WordPress mobile apps in the footer of the mobile theme.', 'jetpack' ),
+			'wpcom_publish_posts_with_markdown' => array(
+				'description'       => esc_html__( 'Use Markdown for posts.', 'jetpack' ),
 				'type'              => 'boolean',
 				'default'           => 0,
 				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'minileven',
+				'jp_group'          => 'markdown',
 			),
 
 			// Monitor
@@ -1265,7 +2182,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 				'description'       => esc_html__( 'Enabled Services and those hidden behind a button', 'jetpack' ),
 				'type'              => 'object',
 				'default'           => array(
-					'visible' => array( 'twitter', 'facebook', 'google-plus-1' ),
+					'visible' => array( 'twitter', 'facebook' ),
 					'hidden'  => array(),
 				),
 				'validate_callback' => __CLASS__ . '::validate_services',
@@ -1374,128 +2291,53 @@ class Jetpack_Core_Json_Api_Endpoints {
 				'validate_callback' => __CLASS__ . '::validate_boolean',
 				'jp_group'          => 'subscriptions',
 			),
+			'social_notifications_subscribe' => array(
+				'description'       => esc_html__( 'Send email notification when someone follows my blog', 'jetpack' ),
+				'type'              => 'boolean',
+				'default'           => 0,
+				'validate_callback' => __CLASS__ . '::validate_boolean',
+				'jp_group'          => 'subscriptions',
+			),
 
 			// Related Posts
 			'show_headline' => array(
-				'description'       => esc_html__( 'Show a "Related" header to more clearly separate the related section from posts', 'jetpack' ),
+				'description'       => esc_html__( 'Highlight related content with a heading', 'jetpack' ),
 				'type'              => 'boolean',
 				'default'           => 1,
 				'validate_callback' => __CLASS__ . '::validate_boolean',
 				'jp_group'          => 'related-posts',
 			),
 			'show_thumbnails' => array(
-				'description'       => esc_html__( 'Use a large and visually striking layout', 'jetpack' ),
+				'description'       => esc_html__( 'Show a thumbnail image where available', 'jetpack' ),
 				'type'              => 'boolean',
 				'default'           => 0,
 				'validate_callback' => __CLASS__ . '::validate_boolean',
 				'jp_group'          => 'related-posts',
 			),
 
-			// Spelling and Grammar - After the Deadline
-			'onpublish' => array(
-				'description'       => esc_html__( 'Proofread when a post or page is first published.', 'jetpack' ),
+			// Search.
+			'instant_search_enabled'               => array(
+				'description'       => esc_html__( 'Enable Instant Search', 'jetpack' ),
 				'type'              => 'boolean',
 				'default'           => 0,
 				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
+				'jp_group'          => 'search',
 			),
-			'onupdate' => array(
-				'description'       => esc_html__( 'Proofread when a post or page is updated.', 'jetpack' ),
+
+			'has_jetpack_search_product'           => array(
+				'description'       => esc_html__( 'Has an active Jetpack Search product purchase', 'jetpack' ),
 				'type'              => 'boolean',
 				'default'           => 0,
 				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
+				'jp_group'          => 'settings',
 			),
-			'Bias Language' => array(
-				'description'       => esc_html__( 'Bias Language', 'jetpack' ),
+
+			'search_auto_config'                   => array(
+				'description'       => esc_html__( 'Trigger an auto config of instant search', 'jetpack' ),
 				'type'              => 'boolean',
 				'default'           => 0,
 				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'Cliches' => array(
-				'description'       => esc_html__( 'Clichés', 'jetpack' ),
-				'type'              => 'boolean',
-				'default'           => 0,
-				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'Complex Expression' => array(
-				'description'       => esc_html__( 'Complex Phrases', 'jetpack' ),
-				'type'              => 'boolean',
-				'default'           => 0,
-				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'Diacritical Marks' => array(
-				'description'       => esc_html__( 'Diacritical Marks', 'jetpack' ),
-				'type'              => 'boolean',
-				'default'           => 0,
-				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'Double Negative' => array(
-				'description'       => esc_html__( 'Double Negatives', 'jetpack' ),
-				'type'              => 'boolean',
-				'default'           => 0,
-				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'Hidden Verbs' => array(
-				'description'       => esc_html__( 'Hidden Verbs', 'jetpack' ),
-				'type'              => 'boolean',
-				'default'           => 0,
-				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'Jargon Language' => array(
-				'description'       => esc_html__( 'Jargon', 'jetpack' ),
-				'type'              => 'boolean',
-				'default'           => 0,
-				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'Passive voice' => array(
-				'description'       => esc_html__( 'Passive Voice', 'jetpack' ),
-				'type'              => 'boolean',
-				'default'           => 0,
-				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'Phrases to Avoid' => array(
-				'description'       => esc_html__( 'Phrases to Avoid', 'jetpack' ),
-				'type'              => 'boolean',
-				'default'           => 0,
-				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'Redundant Expression' => array(
-				'description'       => esc_html__( 'Redundant Phrases', 'jetpack' ),
-				'type'              => 'boolean',
-				'default'           => 0,
-				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'guess_lang' => array(
-				'description'       => esc_html__( 'Use automatically detected language to proofread posts and pages', 'jetpack' ),
-				'type'              => 'boolean',
-				'default'           => 0,
-				'validate_callback' => __CLASS__ . '::validate_boolean',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'ignored_phrases' => array(
-				'description'       => esc_html__( 'Add Phrase to be ignored', 'jetpack' ),
-				'type'              => 'string',
-				'default'           => '',
-				'sanitize_callback' => 'esc_html',
-				'jp_group'          => 'after-the-deadline',
-			),
-			'unignore_phrase' => array(
-				'description'       => esc_html__( 'Remove Phrase from being ignored', 'jetpack' ),
-				'type'              => 'string',
-				'default'           => '',
-				'sanitize_callback' => 'esc_html',
-				'jp_group'          => 'after-the-deadline',
+				'jp_group'          => 'search',
 			),
 
 			// Verification Tools
@@ -1503,34 +2345,124 @@ class Jetpack_Core_Json_Api_Endpoints {
 				'description'       => esc_html__( 'Google Search Console', 'jetpack' ),
 				'type'              => 'string',
 				'default'           => '',
-				'validate_callback' => __CLASS__ . '::validate_alphanum',
+				'validate_callback' => __CLASS__ . '::validate_verification_service',
 				'jp_group'          => 'verification-tools',
 			),
 			'bing' => array(
 				'description'       => esc_html__( 'Bing Webmaster Center', 'jetpack' ),
 				'type'              => 'string',
 				'default'           => '',
-				'validate_callback' => __CLASS__ . '::validate_alphanum',
+				'validate_callback' => __CLASS__ . '::validate_verification_service',
 				'jp_group'          => 'verification-tools',
 			),
 			'pinterest' => array(
 				'description'       => esc_html__( 'Pinterest Site Verification', 'jetpack' ),
 				'type'              => 'string',
 				'default'           => '',
-				'validate_callback' => __CLASS__ . '::validate_alphanum',
+				'validate_callback' => __CLASS__ . '::validate_verification_service',
 				'jp_group'          => 'verification-tools',
 			),
 			'yandex' => array(
-				'description'        => esc_html__( 'Yandex Site Verification', 'jetpack' ),
+				'description'       => esc_html__( 'Yandex Site Verification', 'jetpack' ),
+				'type'              => 'string',
+				'default'           => '',
+				'validate_callback' => __CLASS__ . '::validate_verification_service',
+				'jp_group'          => 'verification-tools',
+			),
+
+			// WordAds.
+			'enable_header_ad' => array(
+				'description'        => esc_html__( 'Display an ad unit at the top of each page.', 'jetpack' ),
+				'type'               => 'boolean',
+				'default'            => 1,
+				'validate_callback'  => __CLASS__ . '::validate_boolean',
+				'jp_group'           => 'wordads',
+			),
+			'wordads_approved' => array(
+				'description'        => esc_html__( 'Is site approved for WordAds?', 'jetpack' ),
+				'type'               => 'boolean',
+				'default'            => 0,
+				'validate_callback'  => __CLASS__ . '::validate_boolean',
+				'jp_group'           => 'wordads',
+			),
+			'wordads_second_belowpost' => array(
+				'description'        => esc_html__( 'Display second ad below post?', 'jetpack' ),
+				'type'               => 'boolean',
+				'default'            => 1,
+				'validate_callback'  => __CLASS__ . '::validate_boolean',
+				'jp_group'           => 'wordads',
+			),
+			'wordads_display_front_page' => array(
+				'description'        => esc_html__( 'Display ads on the front page?', 'jetpack' ),
+				'type'               => 'boolean',
+				'default'            => 1,
+				'validate_callback'  => __CLASS__ . '::validate_boolean',
+				'jp_group'           => 'wordads',
+			),
+			'wordads_display_post' => array(
+				'description'        => esc_html__( 'Display ads on posts?', 'jetpack' ),
+				'type'               => 'boolean',
+				'default'            => 1,
+				'validate_callback'  => __CLASS__ . '::validate_boolean',
+				'jp_group'           => 'wordads',
+			),
+			'wordads_display_page' => array(
+				'description'        => esc_html__( 'Display ads on pages?', 'jetpack' ),
+				'type'               => 'boolean',
+				'default'            => 1,
+				'validate_callback'  => __CLASS__ . '::validate_boolean',
+				'jp_group'           => 'wordads',
+			),
+			'wordads_display_archive' => array(
+				'description'        => esc_html__( 'Display ads on archive pages?', 'jetpack' ),
+				'type'               => 'boolean',
+				'default'            => 1,
+				'validate_callback'  => __CLASS__ . '::validate_boolean',
+				'jp_group'           => 'wordads',
+			),
+			'wordads_custom_adstxt_enabled'        => array(
+				'description'       => esc_html__( 'Custom ads.txt', 'jetpack' ),
+				'type'              => 'boolean',
+				'default'           => 0,
+				'validate_callback' => __CLASS__ . '::validate_boolean',
+				'jp_group'          => 'wordads',
+			),
+			'wordads_custom_adstxt' => array(
+				'description'        => esc_html__( 'Custom ads.txt entries', 'jetpack' ),
+				'type'               => 'string',
+				'default'            => '',
+				'validate_callback'  => __CLASS__ . '::validate_string',
+				'sanitize_callback'  => 'sanitize_textarea_field',
+				'jp_group'           => 'wordads',
+			),
+			'wordads_ccpa_enabled' => array(
+				'description'        => esc_html__( 'Enable support for California Consumer Privacy Act', 'jetpack' ),
+				'type'               => 'boolean',
+				'default'            => 0,
+				'validate_callback'  => __CLASS__ . '::validate_boolean',
+				'jp_group'           => 'wordads',
+			),
+			'wordads_ccpa_privacy_policy_url' => array(
+				'description'        => esc_html__( 'Privacy Policy URL', 'jetpack' ),
+				'type'               => 'string',
+				'default'            => '',
+				'validate_callback' => __CLASS__ . '::validate_string',
+				'sanitize_callback' => 'sanitize_text_field',
+				'jp_group'           => 'wordads',
+			),
+
+			// Google Analytics
+			'google_analytics_tracking_id' => array(
+				'description'        => esc_html__( 'Google Analytics', 'jetpack' ),
 				'type'               => 'string',
 				'default'            => '',
 				'validate_callback'  => __CLASS__ . '::validate_alphanum',
-				'jp_group'          => 'verification-tools',
+				'jp_group'           => 'google-analytics',
 			),
 
 			// Stats
 			'admin_bar' => array(
-				'description'       => esc_html__( 'Put a chart showing 48 hours of views in the admin bar.', 'jetpack' ),
+				'description'       => esc_html__( 'Include a small chart in your admin bar with a 48-hour traffic snapshot.', 'jetpack' ),
 				'type'              => 'boolean',
 				'default'           => 1,
 				'validate_callback' => __CLASS__ . '::validate_boolean',
@@ -1586,12 +2518,67 @@ class Jetpack_Core_Json_Api_Endpoints {
 				'jp_group'          => 'stats',
 			),
 
-			// Settings - Not a module
-			self::holiday_snow_option_name() => array(
+			// Akismet - Not a module, but a plugin. The options can be passed and handled differently.
+			'akismet_show_user_comments_approved' => array(
 				'description'       => '',
 				'type'              => 'boolean',
 				'default'           => 0,
 				'validate_callback' => __CLASS__ . '::validate_boolean',
+				'jp_group'          => 'settings',
+			),
+
+			'wordpress_api_key' => array(
+				'description'       => '',
+				'type'              => 'string',
+				'default'           => '',
+				'validate_callback' => __CLASS__ . '::validate_alphanum',
+				'jp_group'          => 'settings',
+			),
+
+			// Apps card on dashboard
+			'dismiss_dash_app_card' => array(
+				'description'       => '',
+				'type'              => 'boolean',
+				'default'           => 0,
+				'validate_callback' => __CLASS__ . '::validate_boolean',
+				'jp_group'          => 'settings',
+			),
+
+			// Empty stats card dismiss
+			'dismiss_empty_stats_card' => array(
+				'description'       => '',
+				'type'              => 'boolean',
+				'default'           => 0,
+				'validate_callback' => __CLASS__ . '::validate_boolean',
+				'jp_group'          => 'settings',
+			),
+
+			'lang_id' => array(
+				'description' => esc_html__( 'Primary language for the site.', 'jetpack' ),
+				'type' => 'string',
+				'default' => 'en_US',
+				'jp_group' => 'settings',
+			),
+
+			'onboarding' => array(
+				'description'       => '',
+				'type'              => 'object',
+				'default'           => array(
+					'siteTitle'          => '',
+					'siteDescription'    => '',
+					'siteType'           => 'personal',
+					'homepageFormat'     => 'posts',
+					'addContactForm'     => 0,
+					'businessAddress'    => array(
+						'name'   => '',
+						'street' => '',
+						'city'   => '',
+						'state'  => '',
+						'zip'    => '',
+					),
+					'installWooCommerce' => false,
+				),
+				'validate_callback' => __CLASS__ . '::validate_onboarding',
 				'jp_group'          => 'settings',
 			),
 
@@ -1640,15 +2627,45 @@ class Jetpack_Core_Json_Api_Endpoints {
 	}
 
 	/**
+	 * Validates that the parameters are proper values that can be set during Jetpack onboarding.
+	 *
+	 * @since 5.4.0
+	 *
+	 * @param array           $onboarding_data Values to check.
+	 * @param WP_REST_Request $request         The request sent to the WP REST API.
+	 * @param string          $param           Name of the parameter passed to endpoint holding $value.
+	 *
+	 * @return bool|WP_Error
+	 */
+	public static function validate_onboarding( $onboarding_data, $request, $param ) {
+		if ( ! is_array( $onboarding_data ) ) {
+			return new WP_Error( 'invalid_param', esc_html__( 'Not valid onboarding data.', 'jetpack' ) );
+		}
+		foreach ( $onboarding_data as $value ) {
+			if ( is_string( $value ) ) {
+				$onboarding_choice = self::validate_string( $value, $request, $param );
+			} elseif ( is_array( $value ) ) {
+				$onboarding_choice = self::validate_onboarding( $value, $request, $param );
+			} else {
+				$onboarding_choice = self::validate_boolean( $value, $request, $param );
+			}
+			if ( is_wp_error( $onboarding_choice ) ) {
+				return $onboarding_choice;
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * Validates that the parameter is either a pure boolean or a numeric string that can be mapped to a boolean.
 	 *
 	 * @since 4.3.0
 	 *
 	 * @param string|bool $value Value to check.
-	 * @param WP_REST_Request $request
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_boolean( $value, $request, $param ) {
 		if ( ! is_bool( $value ) && ! ( ( ctype_digit( $value ) || is_numeric( $value ) ) && in_array( $value, array( 0, 1 ) ) ) ) {
@@ -1663,10 +2680,10 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @since 4.3.0
 	 *
 	 * @param int $value Value to check.
-	 * @param WP_REST_Request $request
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_posint( $value = 0, $request, $param ) {
 		if ( ! is_numeric( $value ) || $value <= 0 ) {
@@ -1681,10 +2698,10 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @since 4.3.0
 	 *
 	 * @param string $value Value to check.
-	 * @param WP_REST_Request $request
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_list_item( $value = '', $request, $param ) {
 		$attributes = $request->get_attributes();
@@ -1712,10 +2729,10 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @since 4.3.0
 	 *
 	 * @param string $value Value to check.
-	 * @param WP_REST_Request $request
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_module_list( $value = '', $request, $param ) {
 		if ( ! is_array( $value ) ) {
@@ -1737,14 +2754,32 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @since 4.3.0
 	 *
 	 * @param string $value Value to check.
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
+	 * @param string $param Name of the parameter passed to endpoint holding $value.
+	 *
+	 * @return bool|WP_Error
+	 */
+	public static function validate_alphanum( $value = '', $request, $param ) {
+		if ( ! empty( $value ) && ( ! is_string( $value ) || ! preg_match( '/^[a-z0-9]+$/i', $value ) ) ) {
+			return new WP_Error( 'invalid_param', sprintf( esc_html__( '%s must be an alphanumeric string.', 'jetpack' ), $param ) );
+		}
+		return true;
+	}
+
+	/**
+	 * Validates that the parameter is a tag or id for a verification service, or an empty string (to be able to clear the field).
+	 *
+	 * @since 4.6.0
+	 *
+	 * @param string $value Value to check.
 	 * @param WP_REST_Request $request
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
-	public static function validate_alphanum( $value = '', $request, $param ) {
-		if ( ! empty( $value ) && ( ! is_string( $value ) || ! preg_match( '/[a-z0-9]+/i', $value ) ) ) {
-			return new WP_Error( 'invalid_param', sprintf( esc_html__( '%s must be an alphanumeric string.', 'jetpack' ), $param ) );
+	public static function validate_verification_service( $value = '', $request, $param ) {
+		if ( ! empty( $value ) && ! ( is_string( $value ) && ( preg_match( '/^[a-z0-9_-]+$/i', $value ) || jetpack_verification_get_code( $value ) !== false ) ) ) {
+			return new WP_Error( 'invalid_param', sprintf( esc_html__( '%s must be an alphanumeric string or a verification tag.', 'jetpack' ), $param ) );
 		}
 		return true;
 	}
@@ -1755,10 +2790,10 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @since 4.3.0
 	 *
 	 * @param string|bool $value Value to check.
-	 * @param WP_REST_Request $request
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_stats_roles( $value, $request, $param ) {
 		if ( ! empty( $value ) && ! array_intersect( self::$stats_roles, $value ) ) {
@@ -1776,10 +2811,10 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @since 4.3.0
 	 *
 	 * @param string|bool $value Value to check.
-	 * @param WP_REST_Request $request
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_sharing_show( $value, $request, $param ) {
 		$views = array( 'index', 'post', 'page', 'attachment', 'jetpack-portfolio' );
@@ -1806,10 +2841,10 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 *     @type array $visible List of slug of services to share to that are displayed directly in the page.
 	 *     @type array $hidden  List of slug of services to share to that are concealed in a folding menu.
 	 * }
-	 * @param WP_REST_Request $request
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_services( $value, $request, $param ) {
 		if ( ! is_array( $value ) || ! isset( $value['visible'] ) || ! isset( $value['hidden'] ) ) {
@@ -1821,7 +2856,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 			return true;
 		}
 
-		if ( ! class_exists( 'Sharing_Service' ) && ! @include( JETPACK__PLUGIN_DIR . 'modules/sharedaddy/sharing-service.php' ) ) {
+		if ( ! class_exists( 'Sharing_Service' ) && ! include_once( JETPACK__PLUGIN_DIR . 'modules/sharedaddy/sharing-service.php' ) ) {
 			return new WP_Error( 'invalid_param', esc_html__( 'Failed loading required dependency Sharing_Service.', 'jetpack' ) );
 		}
 		$sharer = new Sharing_Service();
@@ -1846,10 +2881,10 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @since 4.3.0
 	 *
 	 * @param string|bool $value Value to check.
-	 * @param WP_REST_Request $request
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_custom_service( $value, $request, $param ) {
 		if ( ! is_array( $value ) || ! isset( $value['sharing_name'] ) || ! isset( $value['sharing_url'] ) || ! isset( $value['sharing_icon'] ) ) {
@@ -1861,7 +2896,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 			return true;
 		}
 
-		if ( ! class_exists( 'Sharing_Service' ) && ! @include( JETPACK__PLUGIN_DIR . 'modules/sharedaddy/sharing-service.php' ) ) {
+		if ( ! class_exists( 'Sharing_Service' ) && ! include_once( JETPACK__PLUGIN_DIR . 'modules/sharedaddy/sharing-service.php' ) ) {
 			return new WP_Error( 'invalid_param', esc_html__( 'Failed loading required dependency Sharing_Service.', 'jetpack' ) );
 		}
 
@@ -1879,17 +2914,17 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @since 4.3.0
 	 *
 	 * @param string $value Value to check.
-	 * @param WP_REST_Request $request
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_custom_service_id( $value = '', $request, $param ) {
 		if ( ! empty( $value ) && ( ! is_string( $value ) || ! preg_match( '/custom\-[0-1]+/i', $value ) ) ) {
 			return new WP_Error( 'invalid_param', sprintf( esc_html__( "%s must be a string prefixed with 'custom-' and followed by a numeric ID.", 'jetpack' ), $param ) );
 		}
 
-		if ( ! class_exists( 'Sharing_Service' ) && ! @include( JETPACK__PLUGIN_DIR . 'modules/sharedaddy/sharing-service.php' ) ) {
+		if ( ! class_exists( 'Sharing_Service' ) && ! include_once( JETPACK__PLUGIN_DIR . 'modules/sharedaddy/sharing-service.php' ) ) {
 			return new WP_Error( 'invalid_param', esc_html__( 'Failed loading required dependency Sharing_Service.', 'jetpack' ) );
 		}
 		$sharer = new Sharing_Service();
@@ -1911,7 +2946,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @param WP_REST_Request $request
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_twitter_username( $value = '', $request, $param ) {
 		if ( ! empty( $value ) && ( ! is_string( $value ) || ! preg_match( '/^@?\w{1,15}$/i', $value ) ) ) {
@@ -1926,10 +2961,10 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @since 4.3.0
 	 *
 	 * @param string $value Value to check.
-	 * @param WP_REST_Request $request
+	 * @param WP_REST_Request $request The request sent to the WP REST API.
 	 * @param string $param Name of the parameter passed to endpoint holding $value.
 	 *
-	 * @return bool
+	 * @return bool|WP_Error
 	 */
 	public static function validate_string( $value = '', $request, $param ) {
 		if ( ! is_string( $value ) ) {
@@ -1946,7 +2981,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 *
 	 * @param string|bool $value Value to check.
 	 *
-	 * @return bool
+	 * @return bool|array
 	 */
 	public static function sanitize_stats_allowed_roles( $value ) {
 		if ( empty( $value ) ) {
@@ -1962,7 +2997,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 *
 	 * @param string $route Regular expression for the endpoint with the module slug to return.
 	 *
-	 * @return array
+	 * @return array|string
 	 */
 	public static function get_module_requested( $route = '/module/(?P<slug>[a-z\-]+)' ) {
 
@@ -1984,23 +3019,27 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 *
 	 * @since 4.3.0
 	 *
-	 * @param string      $modules Can be a single module or a list of modules.
-	 * @param null|string $slug    Slug of the module in the first parameter.
+	 * @param string|array $modules Can be a single module or a list of modules.
+	 * @param null|string  $slug    Slug of the module in the first parameter.
 	 *
-	 * @return array
+	 * @return array|string
 	 */
 	public static function prepare_modules_for_response( $modules = '', $slug = null ) {
-		if ( get_option( 'permalink_structure' ) ) {
-			$sitemap_url = home_url( '/sitemap.xml' );
-			$news_sitemap_url = home_url( '/news-sitemap.xml' );
+		global $wp_rewrite;
+
+		/** This filter is documented in modules/sitemaps/sitemaps.php */
+		$location = apply_filters( 'jetpack_sitemap_location', '' );
+
+		if ( $wp_rewrite->using_index_permalinks() ) {
+			$sitemap_url = home_url( '/index.php' . $location . '/sitemap.xml' );
+			$news_sitemap_url = home_url( '/index.php' . $location . '/news-sitemap.xml' );
+		} else if ( $wp_rewrite->using_permalinks() ) {
+			$sitemap_url = home_url( $location . '/sitemap.xml' );
+			$news_sitemap_url = home_url( $location . '/news-sitemap.xml' );
 		} else {
-			$sitemap_url = home_url( '/?jetpack-sitemap=true' );
-			$news_sitemap_url = home_url( '/?jetpack-news-sitemap=true' );
+			$sitemap_url = home_url( $location . '/?jetpack-sitemap=sitemap.xml' );
+			$news_sitemap_url = home_url( $location . '/?jetpack-sitemap=news-sitemap.xml' );
 		}
-		/** This filter is documented in modules/sitemaps/sitemaps.php */
-		$sitemap_url = apply_filters( 'jetpack_sitemap_location', $sitemap_url );
-		/** This filter is documented in modules/sitemaps/sitemaps.php */
-		$news_sitemap_url = apply_filters( 'jetpack_news_sitemap_location', $news_sitemap_url );
 
 		if ( is_null( $slug ) && isset( $modules['sitemaps'] ) ) {
 			// Is a list of modules
@@ -2031,19 +3070,6 @@ class Jetpack_Core_Json_Api_Endpoints {
 			return $options;
 		}
 
-		foreach ( $options as $key => $value ) {
-
-			if ( isset( $options[ $key ]['validate_callback'] ) ) {
-				unset( $options[ $key ]['validate_callback'] );
-			}
-
-			$default_value = isset( $options[ $key ]['default'] ) ? $options[ $key ]['default'] : '';
-
-			$current_value = get_option( $key, $default_value );
-
-			$options[ $key ]['current_value'] = self::cast_value( $current_value, $options[ $key ] );
-		}
-
 		// Some modules need special treatment.
 		switch ( $module ) {
 
@@ -2061,7 +3087,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 				// Protect
 				$options['jetpack_protect_key']['current_value'] = get_site_option( 'jetpack_protect_key', false );
 				if ( ! function_exists( 'jetpack_protect_format_whitelist' ) ) {
-					@include( JETPACK__PLUGIN_DIR . 'modules/protect/shared-functions.php' );
+					include_once( JETPACK__PLUGIN_DIR . 'modules/protect/shared-functions.php' );
 				}
 				$options['jetpack_protect_global_whitelist']['current_value'] = jetpack_protect_format_whitelist();
 				break;
@@ -2076,50 +3102,58 @@ class Jetpack_Core_Json_Api_Endpoints {
 				$options = self::split_options( $options, get_option( 'verification_services_codes' ) );
 				break;
 
+			case 'google-analytics':
+				$wga = get_option( 'jetpack_wga' );
+				$code = '';
+				if ( is_array( $wga ) && array_key_exists( 'code', $wga ) ) {
+					 $code = $wga[ 'code' ];
+				}
+				$options[ 'google_analytics_tracking_id' ][ 'current_value' ] = $code;
+				break;
+
 			case 'sharedaddy':
 				// It's local, but it must be broken apart since it's saved as an array.
-				if ( ! class_exists( 'Sharing_Service' ) && ! @include( JETPACK__PLUGIN_DIR . 'modules/sharedaddy/sharing-service.php' ) ) {
+				if ( ! class_exists( 'Sharing_Service' ) && ! include_once( JETPACK__PLUGIN_DIR . 'modules/sharedaddy/sharing-service.php' ) ) {
 					break;
 				}
 				$sharer = new Sharing_Service();
 				$options = self::split_options( $options, $sharer->get_global_options() );
 				$options['sharing_services']['current_value'] = $sharer->get_blog_services();
-				break;
-
-			case 'after-the-deadline':
-				if ( ! function_exists( 'AtD_get_options' ) ) {
-					@include( JETPACK__PLUGIN_DIR . 'modules/after-the-deadline.php' );
+				$other_sharedaddy_options = array( 'jetpack-twitter-cards-site-tag', 'sharedaddy_disable_resources', 'sharing_delete_service' );
+				foreach ( $other_sharedaddy_options as $key ) {
+					$default_value = isset( $options[ $key ]['default'] ) ? $options[ $key ]['default'] : '';
+					$current_value = get_option( $key, $default_value );
+					$options[ $key ]['current_value'] = self::cast_value( $current_value, $options[ $key ] );
 				}
-				$atd_options = array_merge( AtD_get_options( get_current_user_id(), 'AtD_options' ), AtD_get_options( get_current_user_id(), 'AtD_check_when' ) );
-				unset( $atd_options['name'] );
-				foreach ( $atd_options as $key => $value ) {
-					$options[ $key ]['current_value'] = self::cast_value( $value, $options[ $key ] );
-				}
-				$atd_options = AtD_get_options( get_current_user_id(), 'AtD_guess_lang' );
-				$options['guess_lang']['current_value'] = self::cast_value( isset( $atd_options['true'] ), $options[ 'guess_lang' ] );
-				$options['ignored_phrases']['current_value'] = AtD_get_setting( get_current_user_id(), 'AtD_ignored_phrases' );
-				unset( $options['unignore_phrase'] );
-				break;
-
-			case 'minileven':
-				$options['wp_mobile_excerpt']['current_value'] =
-					1 === intval( $options['wp_mobile_excerpt']['current_value'] ) ?
-					'enabled' : 'disabled';
-
-				$options['wp_mobile_featured_images']['current_value'] =
-					1 === intval( $options['wp_mobile_featured_images']['current_value'] ) ?
-					'enabled' : 'disabled';
 				break;
 
 			case 'stats':
 				// It's local, but it must be broken apart since it's saved as an array.
 				if ( ! function_exists( 'stats_get_options' ) ) {
-					@include( JETPACK__PLUGIN_DIR . 'modules/stats.php' );
+					include_once( JETPACK__PLUGIN_DIR . 'modules/stats.php' );
 				}
 				$options = self::split_options( $options, stats_get_options() );
 				break;
+			default:
+				// These option are just stored as plain WordPress options.
+				foreach ( $options as $key => $value ) {
+					$default_value = isset( $options[ $key ]['default'] ) ? $options[ $key ]['default'] : '';
+					$current_value = get_option( $key, $default_value );
+					$options[ $key ]['current_value'] = self::cast_value( $current_value, $options[ $key ] );
+				}
 		}
-
+		// At this point some options have current_value not set because they're options
+		// that only get written on update, so we set current_value to the default one.
+		foreach ( $options as $key => $value ) {
+			// We don't need validate_callback in the response
+			if ( isset( $options[ $key ]['validate_callback'] ) ) {
+				unset( $options[ $key ]['validate_callback'] );
+			}
+			$default_value = isset( $options[ $key ]['default'] ) ? $options[ $key ]['default'] : '';
+			if ( ! array_key_exists( 'current_value', $options[ $key ] ) ) {
+				$options[ $key ]['current_value'] = self::cast_value( $default_value, $options[ $key ] );
+			}
+		}
 		return $options;
 	}
 
@@ -2164,9 +3198,9 @@ class Jetpack_Core_Json_Api_Endpoints {
 		if ( isset( $definition['type'] ) ) {
 			switch ( $definition['type'] ) {
 				case 'boolean':
-					if ( 'true' === $value ) {
+					if ( 'true' === $value || 'on' === $value ) {
 						return true;
-					} elseif ( 'false' === $value ) {
+					} elseif ( 'false' === $value || 'off' === $value ) {
 						return false;
 					}
 					return (bool) $value;
@@ -2217,24 +3251,22 @@ class Jetpack_Core_Json_Api_Endpoints {
 			return false;
 		}
 
-		// If the module is inactive, load the class to use the method.
-		if ( ! did_action( 'jetpack_module_loaded_' . $module ) ) {
-			// Class can't be found so do nothing.
-			if ( ! @include( Jetpack::get_module_path( $module ) ) ) {
-				return false;
-			}
-		}
-
 		// Do what is necessary for each module.
 		switch ( $module ) {
 			case 'monitor':
-				$monitor = new Jetpack_Monitor();
-				$value = $monitor->user_receives_notifications( false );
+				// Load the class to use the method. If class can't be found, do nothing.
+				if ( ! class_exists( 'Jetpack_Monitor' ) && ! include_once( Jetpack::get_module_path( $module ) ) ) {
+					return false;
+				}
+				$value = Jetpack_Monitor::user_receives_notifications( false );
 				break;
 
 			case 'post-by-email':
-				$post_by_email = new Jetpack_Post_By_Email();
-				$value = $post_by_email->get_post_by_email_address();
+				// Load the class to use the method. If class can't be found, do nothing.
+				if ( ! class_exists( 'Jetpack_Post_By_Email' ) && ! include_once( Jetpack::get_module_path( $module ) ) ) {
+					return false;
+				}
+				$value = Jetpack_Post_By_Email::init()->get_post_by_email_address();
 				if ( $value === null ) {
 					$value = 'NULL'; // sentinel value so it actually gets set
 				}
@@ -2309,6 +3341,100 @@ class Jetpack_Core_Json_Api_Endpoints {
 	}
 
 	/**
+	 * Deprecated - Get third party plugin API keys.
+	 * @deprecated
+	 *
+	 * @param WP_REST_Request $request {
+	 *     Array of parameters received by request.
+	 *
+	 *     @type string $slug Plugin slug with the syntax 'plugin-directory/plugin-main-file.php'.
+	 * }
+	 */
+	public static function get_service_api_key( $request ) {
+		_deprecated_function( __METHOD__, 'jetpack-6.9.0', 'WPCOM_REST_API_V2_Endpoint_Service_API_Keys::get_service_api_key' );
+		return WPCOM_REST_API_V2_Endpoint_Service_API_Keys::get_service_api_key( $request );
+	}
+
+	/**
+	 * Deprecated - Update third party plugin API keys.
+	 * @deprecated
+	 *
+	 * @param WP_REST_Request $request {
+	 *     Array of parameters received by request.
+	 *
+	 *     @type string $slug Plugin slug with the syntax 'plugin-directory/plugin-main-file.php'.
+	 * }
+	 */
+	public static function update_service_api_key( $request ) {
+		_deprecated_function( __METHOD__, 'jetpack-6.9.0', 'WPCOM_REST_API_V2_Endpoint_Service_API_Keys::update_service_api_key' );
+		return WPCOM_REST_API_V2_Endpoint_Service_API_Keys::update_service_api_key( $request ) ;
+	}
+
+	/**
+	 * Deprecated - Delete a third party plugin API key.
+	 * @deprecated
+	 *
+	 * @param WP_REST_Request $request {
+	 *     Array of parameters received by request.
+	 *
+	 *     @type string $slug Plugin slug with the syntax 'plugin-directory/plugin-main-file.php'.
+	 * }
+	 */
+	public static function delete_service_api_key( $request ) {
+		_deprecated_function( __METHOD__, 'jetpack-6.9.0', 'WPCOM_REST_API_V2_Endpoint_Service_API_Keys::delete_service_api_key' );
+		return WPCOM_REST_API_V2_Endpoint_Service_API_Keys::delete_service_api_key( $request );
+	}
+
+	/**
+	 * Deprecated - Validate the service provided in /service-api-keys/ endpoints.
+	 * To add a service to these endpoints, add the service name to $valid_services
+	 * and add '{service name}_api_key' to the non-compact return array in get_option_names(),
+	 * in class-jetpack-options.php
+	 * @deprecated
+	 *
+	 * @param string $service The service the API key is for.
+	 * @return string Returns the service name if valid, null if invalid.
+	 */
+	public static function validate_service_api_service( $service = null ) {
+		_deprecated_function( __METHOD__, 'jetpack-6.9.0', 'WPCOM_REST_API_V2_Endpoint_Service_API_Keys::validate_service_api_service' );
+		return WPCOM_REST_API_V2_Endpoint_Service_API_Keys::validate_service_api_service( $service );
+	}
+
+	/**
+	 * Error response for invalid service API key requests with an invalid service.
+	 */
+	public static function service_api_invalid_service_response() {
+		_deprecated_function( __METHOD__, 'jetpack-6.9.0', 'WPCOM_REST_API_V2_Endpoint_Service_API_Keys::service_api_invalid_service_response' );
+		return WPCOM_REST_API_V2_Endpoint_Service_API_Keys::service_api_invalid_service_response();
+	}
+
+	/**
+	 * Deprecated - Validate API Key
+	 * @deprecated
+	 *
+	 * @param string $key The API key to be validated.
+	 * @param string $service The service the API key is for.
+	 *
+	 */
+	public static function validate_service_api_key( $key = null, $service = null ) {
+		_deprecated_function( __METHOD__, 'jetpack-6.9.0', 'WPCOM_REST_API_V2_Endpoint_Service_API_Keys::validate_service_api_key' );
+		return WPCOM_REST_API_V2_Endpoint_Service_API_Keys::validate_service_api_key( $key , $service  );
+	}
+
+	/**
+	 * Deprecated - Validate Mapbox API key
+	 * Based loosely on https://github.com/mapbox/geocoding-example/blob/master/php/MapboxTest.php
+	 * @deprecated
+	 *
+	 * @param string $key The API key to be validated.
+	 */
+	public static function validate_service_api_key_mapbox( $key ) {
+		_deprecated_function( __METHOD__, 'jetpack-6.9.0', 'WPCOM_REST_API_V2_Endpoint_Service_API_Keys::validate_service_api_key' );
+		return WPCOM_REST_API_V2_Endpoint_Service_API_Keys::validate_service_api_key_mapbox( $key );
+
+	}
+
+	/**
 	 * Checks if the queried plugin is active.
 	 *
 	 * @since 4.2.0
@@ -2317,7 +3443,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 * @return bool
 	 */
 	private static function core_is_plugin_active( $plugin ) {
-		if ( ! function_exists( 'get_plugins' ) ) {
+		if ( ! function_exists( 'is_plugin_active' ) ) {
 			require_once ABSPATH . 'wp-admin/includes/plugin.php';
 		}
 
@@ -2342,11 +3468,35 @@ class Jetpack_Core_Json_Api_Endpoints {
 	}
 
 	/**
+	 * Ensures that Akismet is installed and activated.
+	 *
+	 * @since 7.7
+	 *
+	 * @return WP_REST_Response A response indicating whether or not the installation was successful.
+	 */
+	public static function activate_akismet() {
+		jetpack_require_lib( 'plugins' );
+		$result = Jetpack_Plugins::install_and_activate_plugin('akismet');
+
+		if ( is_wp_error( $result ) ) {
+			return rest_ensure_response( array(
+				'code'    => 'failure',
+				'message' => esc_html__( 'Unable to activate Akismet', 'jetpack' )
+			) );
+		} else {
+			return rest_ensure_response( array(
+				'code'    => 'success',
+				'message' => esc_html__( 'Activated Akismet', 'jetpack' )
+			) );
+		}
+	}
+
+	/**
 	 * Get data about the queried plugin. Currently it only returns whether the plugin is active or not.
 	 *
 	 * @since 4.2.0
 	 *
-	 * @param WP_REST_Request $data {
+	 * @param WP_REST_Request $request {
 	 *     Array of parameters received by request.
 	 *
 	 *     @type string $slug Plugin slug with the syntax 'plugin-directory/plugin-main-file.php'.
@@ -2354,7 +3504,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 	 *
 	 * @return bool|WP_Error True if module was activated. Otherwise, a WP_Error instance with the corresponding error.
 	 */
-	public static function get_plugin( $data ) {
+	public static function get_plugin( $request ) {
 
 		$plugins = self::core_get_plugins();
 
@@ -2362,7 +3512,7 @@ class Jetpack_Core_Json_Api_Endpoints {
 			return new WP_Error( 'no_plugins_found', esc_html__( 'This site has no plugins.', 'jetpack' ), array( 'status' => 404 ) );
 		}
 
-		$plugin = stripslashes( $data['plugin'] );
+		$plugin = stripslashes( $request['plugin'] );
 
 		if ( ! in_array( $plugin, array_keys( $plugins ) ) ) {
 			return new WP_Error( 'plugin_not_found', esc_html( sprintf( __( 'Plugin %s is not installed.', 'jetpack' ), $plugin ) ), array( 'status' => 404 ) );
@@ -2379,4 +3529,38 @@ class Jetpack_Core_Json_Api_Endpoints {
 		) );
 	}
 
+	/**
+	 * Proxies a request to WordPress.com to request that a magic link be sent to the current user
+	 * to log this user in to the mobile app via email.
+	 *
+	 * @param WP_REST_REQUEST $request The request parameters.
+	 * @return bool|WP_Error
+	 */
+	public static function send_mobile_magic_link( $request ) {
+		$xml = new Jetpack_IXR_Client(
+			array(
+				'user_id' => get_current_user_id(),
+			)
+		);
+
+		$xml->query( 'jetpack.sendMobileMagicLink', array() );
+		if ( $xml->isError() ) {
+			return new WP_Error(
+				'error_sending_mobile_magic_link',
+				sprintf(
+					'%s: %s',
+					$xml->getErrorCode(),
+					$xml->getErrorMessage()
+				)
+			);
+		}
+
+		$response = $xml->getResponse();
+
+		return rest_ensure_response(
+			array(
+				'code' => 'success',
+			)
+		);
+	}
 } // class end

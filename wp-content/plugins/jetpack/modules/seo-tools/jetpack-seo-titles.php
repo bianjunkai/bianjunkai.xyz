@@ -131,7 +131,7 @@ class Jetpack_SEO_Titles {
 
 			case 'post_title':
 			case 'page_title':
-				return get_the_title();
+				return the_title_attribute( array( 'echo' => false ) );
 
 			case 'group_title':
 				return single_tag_title( '', false );
@@ -156,7 +156,7 @@ class Jetpack_SEO_Titles {
 			return 'front_page';
 		}
 
-		if ( is_category() || is_tag() ) {
+		if ( is_category() || is_tag() || is_tax() ) {
 			return 'groups';
 		}
 
@@ -227,7 +227,7 @@ class Jetpack_SEO_Titles {
 	/**
 	 * Checks if a given format conforms to predefined SEO title templates.
 	 *
-	 * Every format type and token must be whitelisted.
+	 * Every format type and token must be specifically allowed..
 	 * @see get_allowed_tokens()
 	 *
 	 * @param array $title_formats Template of SEO title to check.
@@ -244,6 +244,10 @@ class Jetpack_SEO_Titles {
 		foreach ( $title_formats as $format_type => $format_array ) {
 			if ( ! in_array( $format_type, array_keys( $allowed_tokens ) ) ) {
 				return false;
+			}
+
+			if ( '' === $format_array ) {
+				continue;
 			}
 
 			if ( ! is_array( $format_array ) ) {

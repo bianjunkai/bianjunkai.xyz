@@ -1,0 +1,112 @@
+# Translation of Plugins - Pinyin Slugs - Stable (latest release) in Chinese (China)
+# This file is distributed under the same license as the Plugins - Pinyin Slugs - Stable (latest release) package.
+msgid ""
+msgstr ""
+"PO-Revision-Date: 2020-06-06 22:50:31+0000\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"X-Generator: GlotPress/3.0.0-alpha\n"
+"Language: zh_CN\n"
+"Project-Id-Version: Plugins - Pinyin Slugs - Stable (latest release)\n"
+
+#. Author URI of the plugin/theme
+msgid "https://so-wp.com"
+msgstr "https://so-wp.com"
+
+#. Plugin URI of the plugin/theme
+msgid "https://so-wp.com/plugin/pinyin-slugs"
+msgstr "https://so-wp.com/plugin/pinyin-slugs"
+
+#. Plugin Name of the plugin/theme
+msgid "Pinyin Slugs"
+msgstr "Pinyin Slugs"
+
+#: admin/settings.php:104
+msgid "BHI Consulting for Websites"
+msgstr "BHI Consulting for Websites"
+
+#. #-#-#-#-#  so-pinyin-slugs-code.pot (Pinyin Slugs 2.1.4)  #-#-#-#-#
+#. Author of the plugin/theme
+#: admin/settings.php:106
+msgid "SO WP"
+msgstr "SO WP"
+
+#: so-pinyin-slugs.php:242
+msgid "Settings"
+msgstr "设置"
+
+#: admin/settings.php:109
+msgid "WordPress.org Profile"
+msgstr "WordPress.org Profile"
+
+#: admin/settings.php:107
+msgid "Github"
+msgstr "GitHub"
+
+#: admin/settings.php:105
+msgid "LinkedIn"
+msgstr "LinkedIn"
+
+#: admin/settings.php:108
+msgid "WP Tips"
+msgstr "WP技巧"
+
+#: admin/settings.php:97
+msgid "Hi, my name is Pieter Bos, I hope you like this plugin! Please check out any of my other plugins on <a href=\"%s\" title=\"SO WP Plugins\">SO WP Plugins</a>. You can find out more information about me via the following links:"
+msgstr "嗨，我叫Pieter Bos，希望您喜欢这个插件！ 请在<a href=\"%s\" title=\"SO WP 插件\">SO WP插件</a>上查看我的其他任何插件。 您可以通过以下链接找到有关我的更多信息："
+
+#: admin/settings.php:90
+msgid "About the Author"
+msgstr "关于作者"
+
+#. Translators: 1 is link to Github Repo
+#: admin/settings.php:81
+msgid "If you have an issue with this plugin or want to leave a feature request, please note that I give <a href=\"%s\" title=\"Support or Feature Requests via Github\">support via Github</a> only."
+msgstr "如果您对此插件有疑问或想要提出功能请求，请注意，我仅提供 <a href=\"%s\" title=\"Support or Feature Requests via Github\">通过Github的支持</a>。"
+
+#. Translators: 1 is link to WP Repo
+#: admin/settings.php:72
+msgid "If you have found this plugin at all useful, please give it a favourable rating in the <a href=\"%s\" title=\"Rate this plugin!\">WordPress Plugin Repository</a>."
+msgstr "如果您发现此插件非常有用，请在<a href=\"%s\" title=\"对该插件评级！\"> WordPress Plugin Repository</a>中给它一个好评。"
+
+#: admin/settings.php:61
+msgid "Save Settings"
+msgstr "保存设置"
+
+#: admin/settings.php:51
+msgid "By default the maximum slug length is set to 100 letters; anything over that limit will not be converted. If you want to change this limit, you can do that here."
+msgstr "默认情况下，最大别名长度设置为100个字母；超过该限制的任何内容都不会转换。如果要更改此限制，可以在此处进行。"
+
+#: admin/settings.php:46
+msgid "Slug Length"
+msgstr "别名长度"
+
+#: admin/settings.php:28
+msgid "A <strong>limitation of Pinyin Slugs</strong> is that it completely ignores anything other than Chinese characters in your slug. For example: if you have a product name with a number in it, then the plugin ignores this number. You will have to add that manually to the slug if needed. Likewise, if you're writing an English title and you combine it with some Chinese characters, the resulting slug will only contain the pinyin of those characters; in other words the English is completely ignored."
+msgstr "<strong> Pinyin Slugs</strong>的局限性在于，它会完全忽略别名中除汉字以外的任何内容。 例如：如果您的产品名称中带有数字，则插件将忽略该数字。 如果需要，您将必须手动将其添加到该别名中。 同样，如果您要写英文标题，并且将其与一些汉字结合使用，则生成的子词将仅包含这些汉字的拼音； 换句话说，英语被完全忽略了。"
+
+#: admin/settings.php:26
+msgid "In that case you might want to add 301 Permanent Redirects for those specific links to your .htaccess file."
+msgstr "在这种情况下，您可能想要为这些特定链接添加301永久重定向到.htaccess文件。"
+
+#: admin/settings.php:24
+msgid "<strong>Note:</strong> If you choose to manually rewrite the slugs of existing permalinks, then please keep in mind that the previous permalinks that have been indexed by search engines (like Google, Baidu) do not change automatically. This may impact your site ranking if you just leave it like that."
+msgstr "<strong>注意</strong>：如果您选择手动重写现有永久链接的标记，请记住，以前由搜索引擎（例如Google，百度）建立索引的永久链接不会自动更改。 如果您执意如此，这可能会影响您的网站排名。"
+
+#: admin/settings.php:22
+msgid "Pinyin Slugs will only work for new slugs, not on existing slugs. You can choose to rewrite the slugs of existing permalinks manually."
+msgstr "Pinyin Slugs仅适用于新别名，不适用于现有别名。 您可以选择手动重写现有永久链接的别名。"
+
+#: admin/settings.php:20
+msgid "Pinyin Slugs automatically transforms Chinese character titles into pinyin slugs."
+msgstr "Pinyin Slugs会自动将汉字标题转换为拼音别名。"
+
+#: admin/settings.php:16
+msgid "Important Information"
+msgstr "重要信息"
+
+#: admin/settings.php:12
+msgid "Pinyin Slugs Settings"
+msgstr "Pinyin Slugs 设置"

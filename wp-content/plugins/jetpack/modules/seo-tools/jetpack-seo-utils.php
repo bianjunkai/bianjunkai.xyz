@@ -12,7 +12,7 @@ class Jetpack_SEO_Utils {
 	/**
 	 * Old version of option name that was previously used under Free plan.
 	 */
-	const GRANDFATHERED_META_OPTION = 'seo_meta_description';
+	const LEGACY_META_OPTION = 'seo_meta_description';
 
 	/**
 	 * Used to check whether SEO tools are enabled for given site.
@@ -22,13 +22,26 @@ class Jetpack_SEO_Utils {
 	 * @return bool True if SEO tools are enabled, false otherwise.
 	 */
 	public static function is_enabled_jetpack_seo( $site_id = 0 ) {
-		if ( function_exists( 'has_blog_sticker' ) ) {
+		/**
+		 * Can be used by SEO plugin authors to disable the conflicting output of SEO Tools.
+		 *
+		 * @module seo-tools
+		 *
+		 * @since 5.0.0
+		 *
+		 * @param bool True if SEO Tools should be disabled, false otherwise.
+		 */
+		if ( apply_filters( 'jetpack_disable_seo_tools', false ) ) {
+			return false;
+		}
+
+		if ( function_exists( 'has_any_blog_stickers' ) ) {
 			// For WPCOM sites
 			if ( empty( $site_id ) ) {
 				$site_id = get_current_blog_id();
 			}
 
-			return has_blog_sticker( 'unlimited-premium-themes', $site_id );
+			return has_any_blog_stickers( array( 'business-plan', 'ecommerce-plan' ), $site_id );
 		}
 
 		// For all Jetpack sites
@@ -38,10 +51,10 @@ class Jetpack_SEO_Utils {
 	/**
 	 * Checks if this option was set while it was still available under free plan.
 	 *
-	 * @return bool True if we should enable grandfathering, false otherwise.
+	 * @return bool True if we should enable legacy usage, false otherwise.
 	 */
-	public static function has_grandfathered_front_page_meta() {
-		return ! self::is_enabled_jetpack_seo() && get_option( self::GRANDFATHERED_META_OPTION );
+	public static function has_legacy_front_page_meta() {
+		return ! self::is_enabled_jetpack_seo() && get_option( self::LEGACY_META_OPTION );
 	}
 
 	/**
@@ -49,24 +62,24 @@ class Jetpack_SEO_Utils {
 	 *
 	 * Since we allowed non-business users to set Front page meta description for some time,
 	 * before bundling it with other SEO tools features that require a business plan,
-	 * we are supporting grandfathering here.
+	 * we are supporting legacy usage here.
 	 *
 	 * @return string Front page meta description string or empty string.
 	 */
 	public static function get_front_page_meta_description() {
 		if ( self::is_enabled_jetpack_seo() ) {
 			$front_page_meta = get_option( self::FRONT_PAGE_META_OPTION );
-			return  $front_page_meta ? $front_page_meta : get_option( self::GRANDFATHERED_META_OPTION, '' );
+			return $front_page_meta ? $front_page_meta : get_option( self::LEGACY_META_OPTION, '' );
 		}
 
-		// Support grandfathering for non-business users.
-		return get_option( self::GRANDFATHERED_META_OPTION, '' );
+		// Support legacy usage for non-business users.
+		return get_option( self::LEGACY_META_OPTION, '' );
 	}
 
 	/**
 	 * Updates the site option value for front page meta description.
 	 *
-	 * We are taking care to update the correct option, in case the value is grandfathered for current site.
+	 * We are taking care to update the correct option, in case the value is legacy-ed for current site.
 	 *
 	 * @param $value string New value for front page meta description.
 	 *
@@ -92,15 +105,15 @@ class Jetpack_SEO_Utils {
 			$front_page_description = substr( $front_page_description, 0, $description_max_length );
 		}
 
-		$can_set_meta = self::is_enabled_jetpack_seo();
-		$grandfathered_meta_option = get_option( self::GRANDFATHERED_META_OPTION );
-		$has_old_meta = ! empty( $grandfathered_meta_option );
-		$option_name = self::has_grandfathered_front_page_meta() ? self::GRANDFATHERED_META_OPTION : self::FRONT_PAGE_META_OPTION;
+		$can_set_meta       = self::is_enabled_jetpack_seo();
+		$legacy_meta_option = get_option( self::LEGACY_META_OPTION );
+		$has_old_meta       = ! empty( $legacy_meta_option );
+		$option_name        = self::has_legacy_front_page_meta() ? self::LEGACY_META_OPTION : self::FRONT_PAGE_META_OPTION;
 
 		$did_update = update_option( $option_name, $front_page_description );
 
 		if ( $did_update && $has_old_meta && $can_set_meta ) {
-			// Delete grandfathered option if user has switched to Business plan and updated meta description.
+			// Delete legacy option if user has switched to Business plan and updated meta description.
 			delete_option( 'seo_meta_description' );
 		}
 
